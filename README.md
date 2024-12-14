@@ -1,4 +1,4 @@
-## EchoFM - A Vision Foundation Model for Echocardiogram Video
+## EchoFM - A Video Vision Foundation Model for Echocardiogram
 
 Official repo for [EchoFM: Foundation Model for Generalizable  Echocardiogram Analysis]
 
