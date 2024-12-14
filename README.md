@@ -8,8 +8,8 @@ Official repo for [EchoFM: Foundation Model for Generalizable  Echocardiogram An
 - EchoFM has been validated in multiple downstream tasks including segmentatino, classification, disease detection tasks.
 - EchoFM can be efficiently adapted to customised tasks.
 
-<!-- ![alt text](https://github.com/tvseg/MoME-RO/blob/main/Picture1.png) 
-![alt text](https://github.com/tvseg/MoME-RO/blob/main/Picture2.png)  -->
+<img src="./figure/figure1.png" width="800px"></img>
+<img src="./figure/figure2.png" width="800px"></img>
 
 ## 1. Environment Setup
 
