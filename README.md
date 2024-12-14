@@ -24,7 +24,7 @@ cd EchoFM
 
 Download link for EchoFM Weights
 
-## 3.Citation
+## 3. Citation
 If you find this repository useful, please consider citing this paper: [will be released soon]
 ```
 @article{kim2024echofm,
