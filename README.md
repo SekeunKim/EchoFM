@@ -21,8 +21,8 @@ cd EchoFM
 ```
 
 ## 2. Download model
-
-Download link for EchoFM Weights
+Download the EchoFM weights from the following link:  
+[EchoFM Weights](https://drive.google.com/drive/folders/1Gn43_qMwk-wzZIxZdxXLyk2mXDv5Jsxt?usp=share_link)
 
 ## 3. Citation
 If you find this repository useful, please consider citing this paper: [will be released soon]
