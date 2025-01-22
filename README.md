@@ -2,6 +2,8 @@
 
 Official repo for [EchoFM: Foundation Model for Generalizable  Echocardiogram Analysis]
 
+This model and associated code are released under the CC-BY-NC-ND 4.0 license and may only be used for non-commercial, academic research purposes with proper attribution. Any commercial use, sale, or other monetization of the EchoFM model and its derivatives, which include models trained on outputs from the EchoFM model or datasets created from the EchoFM model, is prohibited and requires prior approval. 
+
 <img src="./figure/fig1.png" width="800px"></img>
 
 ## Key features
