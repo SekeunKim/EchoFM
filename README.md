@@ -6,6 +6,8 @@ This model and associated code are released under the CC-BY-NC-ND 4.0 license an
 
 <img src="./figure/fig1.png" width="800px"></img>
 
+This work was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government(MSIT) (RS-2024-00348696)
+
 ## Key features
 
 - EchoFM is pre-trained on 290K Echocardiography clips with self-supervised learning
