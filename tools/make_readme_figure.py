@@ -159,17 +159,20 @@ def main():
         e_opp = float(0.5 * (e[tk(ed1), tk(es)] + e[tk(ed2), tk(es)]))
         if e_same <= e_opp + 0.3:
             continue
-        candidates.append((e_same - e_opp, int(clip_i), ed1, es, ed2, e_same, e_opp))
+        # keep the exact sampled window: the dataset draws a random temporal
+        # window per __getitem__, so re-loading would desync frames and labels
+        candidates.append(
+            (e_same - e_opp, int(clip_i), ed1, es, ed2, e_same, e_opp,
+             imgs[0].cpu(), area)
+        )
 
-    candidates.sort(reverse=True)
+    candidates.sort(key=lambda c: -c[0])
     print(f"{len(candidates)} strong B-mode candidates")
-    for rank, (gap, clip_i, ed1, es, ed2, e_same, e_opp) in enumerate(
+    for rank, (gap, clip_i, ed1, es, ed2, e_same, e_opp, imgs_c, area) in enumerate(
         candidates[: args.num_render]
     ):
-        imgs = ds[clip_i]
-        frames = [np.clip(imgs[:, f].permute(1, 2, 0).numpy(), 0, 1)
-                  for f in range(imgs.shape[1])]
-        area = cavity_curve(imgs.unsqueeze(0))
+        frames = [np.clip(imgs_c[:, f].permute(1, 2, 0).numpy(), 0, 1)
+                  for f in range(imgs_c.shape[1])]
         path = os.path.join(args.out, f"hero_{rank:02d}_gap{gap:.2f}.png")
         render(frames, area, ed1, es, ed2, e_same, e_opp, path)
         print("wrote", path, os.path.basename(ds.paths[clip_i]))

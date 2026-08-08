@@ -1,20 +1,54 @@
-## EchoFM - A Video Vision Foundation Model for Echocardiogram
+# EchoFM: A Video Vision Foundation Model for Echocardiography
 
-Official repo for [EchoFM: Foundation Model for Generalizable  Echocardiogram Analysis]
+[![IEEE TMI](https://img.shields.io/badge/IEEE%20TMI-10.1109%2FTMI.2025.3580713-00629B)](https://ieeexplore.ieee.org/document/11040094)
+[![arXiv](https://img.shields.io/badge/arXiv-2410.23413-b31b1b)](https://arxiv.org/abs/2410.23413)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-sekeun%2FEchoFM-FFD21E)](https://huggingface.co/sekeun/EchoFM)
+[![License](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-lightgrey)](#license)
 
-This model and associated code are released under the CC-BY-NC-ND 4.0 license and may only be used for non-commercial, academic research purposes with proper attribution. Any commercial use, sale, or other monetization of the EchoFM model and its derivatives, which include models trained on outputs from the EchoFM model or datasets created from the EchoFM model, is prohibited and requires prior approval. 
+Official repository for **[EchoFM: Foundation Model for Generalizable Echocardiogram Analysis](https://ieeexplore.ieee.org/document/11040094)** (IEEE Transactions on Medical Imaging, 2025).
+
+EchoFM is a ViT-L video foundation model pretrained on echocardiogram clips with a
+self-supervised objective built around the **cardiac cycle** — the one structure every
+echo is guaranteed to have. The pretrained encoder produces video-, frame-, and
+token-level representations that transfer to segmentation, classification, and
+disease-detection tasks.
 
 <img src="./figure/fig1.png" width="800px"></img>
 
-## Key features
+## Highlights
 
-- EchoFM is pre-trained on 290K Echocardiography clips with self-supervised learning
-- EchoFM has been validated in multiple downstream tasks including segmentation, classification, disease detection tasks.
-- EchoFM can be efficiently adapted to customised tasks.
+- **Periodicity-aware self-supervision.** Masked reconstruction is combined with a
+  periodic contrastive objective, so embeddings encode *where in the cardiac cycle*
+  each frame lies — learned without ECG, ED/ES labels, or segmentation.
+- **Pretrained at scale.** Self-supervised pretraining on 290K echocardiography clips.
+- **Validated downstream.** Segmentation, classification, and disease detection; the
+  encoder adapts efficiently to custom tasks with light heads or fine-tuning.
 
 <img src="./figure/fig2.png" width="800px"></img>
 
-## 1. Environment Setup
+## How it works
+
+On top of a video MAE (75% masking, per-patch normalized targets), EchoFM adds two
+cycle-aware components:
+
+- **Spatio-temporally consistent masking** — one spatial mask shared across all
+  frames, so the encoder must explain appearance changes through cardiac motion
+  rather than by copying from unmasked locations in other frames.
+- **Periodic contrastive learning** — a pixel-space cycle-similarity prior (motion
+  component only; the static anatomy component is removed) defines which frame pairs
+  share a cardiac phase. A hard-mined triplet loss and a dense similarity-distillation
+  (KL) loss transfer this periodic structure into the embedding space.
+
+The result is directly measurable: end-diastole frames from *different* cycles
+(ED, ED′) embed close together, while ED vs. end-systole (ES) — half a cycle apart —
+are pushed far apart:
+
+<img src="./figure/ed_es_periodicity.png" width="800px"></img>
+
+On held-out clips, the embedding phase contrast is positive for 100% of clips, and the
+embedding similarity structure matches the pixel-level cycle structure with r = 0.98.
+
+## Installation
 
 ```bash
 git clone https://github.com/SekeunKim/EchoFM.git
@@ -22,21 +56,42 @@ cd EchoFM
 ./environment_setup.sh EchoFM
 ```
 
-## 2. Download model
-Download the EchoFM weights from the following link:  
-Pretrained weights are hosted on Hugging Face: [sekeun/EchoFM](https://huggingface.co/sekeun/EchoFM)
+## Pretrained weights & quick start
 
-## 3. Self-supervised pretraining
+Weights are hosted on Hugging Face: [sekeun/EchoFM](https://huggingface.co/sekeun/EchoFM).
 
-EchoFM pretrains a ViT-L video MAE with (i) **spatio-temporal consistent masking** — one spatial mask shared across all frames — and (ii) a **periodic-driven contrastive (triplet) loss** over per-frame CLS embeddings from a shared-weight ViT projector, on top of the masked reconstruction loss.
+```python
+import torch
+from huggingface_hub import hf_hub_download
+from EchoFM import models_mae
+
+weights = hf_hub_download(repo_id="sekeun/EchoFM", filename="echofm_vitl.pth")
+ckpt = torch.load(weights, map_location="cpu")
+model = models_mae.mae_vit_large_patch16(**{
+    k: ckpt["model_args"][k] for k in
+    ["num_frames", "t_patch_size", "pred_t_dim", "sep_pos_embed", "cls_embed", "norm_pix_loss"]
+})
+model.load_state_dict(ckpt["model"], strict=False)
+model.eval()
+
+# imgs: [B, 3, 32, 224, 224] in [0, 1]
+latent, _, _ = model.forward_encoder(imgs, mask_ratio=0.0)   # [B, 8*196, 1024] tokens
+cls_stack = torch.stack(model.forward_prj(latent), dim=1)    # [B, 8, 1024] per-frame (phase) embeddings
+video_emb = latent.mean(dim=1)                               # [B, 1024] video embedding
+```
+
+`notebooks/echofm_usage.ipynb` walks through feature extraction for downstream tasks,
+masked reconstruction, and the periodicity verification shown above.
+
+## Self-supervised pretraining
 
 ```bash
 # folder of video files (.mp4/.avi/...)
 torchrun --nproc_per_node=8 --standalone main_pretrain.py \
     --data_source mp4 --data_path /path/to/videos \
     --model mae_vit_large_patch16 \
-    --num_frames 32 --t_patch_size 4 --mask_ratio 0.75 \
-    --batch_size 8 --epochs 100 --warmup_epochs 10 --blr 1e-3 \
+    --num_frames 32 --t_patch_size 4 --mask_ratio 0.75 --norm_pix_loss \
+    --batch_size 8 --epochs 200 --warmup_epochs 10 --blr 1e-3 \
     --output_dir ./output_dir
 
 # folder of cached clips stored as .npy arrays of shape (T, H, W, 3) uint8
@@ -44,41 +99,26 @@ torchrun --nproc_per_node=8 --standalone main_pretrain.py \
     --data_source npy --data_path /path/to/clips [same options]
 ```
 
-Total loss = masked-patch MSE + triplet loss; both terms are logged separately (`recon`, `triplet`) to stdout and tensorboard.
+Total loss = masked reconstruction + `--triplet_weight` × triplet +
+`--cycle_weight` × cycle-distillation; all terms are logged separately
+(`recon`, `triplet`, `cycle`, `trip_act`) to stdout and tensorboard.
 
 Unit/smoke tests: `python tests/test_echofm.py [--cuda]`.
-
 A SLURM/apptainer launch script is provided in `cluster/pretrain_apptainer.job`.
 
-## 4. Periodicity-aware pretraining: what makes EchoFM different
+## License
 
-Generic video foundation models treat an echocardiogram as an arbitrary video.
-EchoFM additionally exploits the one structure every echo is guaranteed to have —
-the **cardiac cycle** — as free supervision:
+This model and associated code are released under the CC-BY-NC-ND 4.0 license and may
+only be used for non-commercial, academic research purposes with proper attribution.
+Any commercial use, sale, or other monetization of the EchoFM model and its
+derivatives — including models trained on outputs from the EchoFM model or datasets
+created from the EchoFM model — is prohibited and requires prior approval.
 
-- **Spatio-temporally consistent masking** keeps the same spatial patches visible in
-  every frame, so the encoder must explain appearance changes through cardiac motion
-  rather than by copying from other locations.
-- **Periodic contrastive learning.** A pixel-space cycle-similarity prior (motion
-  component only; static anatomy is removed) defines which frame pairs share a cardiac
-  phase. A hard-mined triplet loss plus a dense similarity-distillation (KL) loss
-  transfer this periodic structure into the embedding space.
+## Citation
 
-The result: frame embeddings encode *where in the cardiac cycle* each frame lies —
-learned **without ECG, ED/ES labels, or segmentation**. End-diastole frames from
-different cycles (ED, ED′) embed close together, while ED vs. end-systole (ES),
-half a cycle apart, are pushed far apart:
+If you find this repository useful, please cite our IEEE TMI paper:
 
-<img src="./figure/ed_es_periodicity.png" width="800px"></img>
-
-On held-out clips the embedding phase contrast is positive for 100% of clips and the
-embedding similarity structure matches the pixel-level cycle structure with r = 0.98.
-`notebooks/echofm_usage.ipynb` reproduces this check, along with feature extraction
-for downstream tasks and masked reconstruction.
-
-## 5. Citation
-If you find this repository useful, please consider citing our IEEE TMI paper:
-```
+```bibtex
 @article{kim2025echofm,
   title={EchoFM: Foundation Model for Generalizable Echocardiogram Analysis},
   author={Kim, Sekeun and Jin, Pengfei and Song, Sifan and Chen, Cheng and Li, Yiwei and Ren, Hui and Li, Xiang and Liu, Tianming and Li, Quanzheng},
