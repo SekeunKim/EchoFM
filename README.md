@@ -9,7 +9,7 @@ This model and associated code are released under the CC-BY-NC-ND 4.0 license an
 ## Key features
 
 - EchoFM is pre-trained on 290K Echocardiography clips with self-supervised learning
-- EchoFM has been validated in multiple downstream tasks including segmentatino, classification, disease detection tasks.
+- EchoFM has been validated in multiple downstream tasks including segmentation, classification, disease detection tasks.
 - EchoFM can be efficiently adapted to customised tasks.
 
 <img src="./figure/fig2.png" width="800px"></img>
@@ -50,23 +50,43 @@ Unit/smoke tests: `python tests/test_echofm.py [--cuda]`.
 
 A SLURM/apptainer launch script is provided in `cluster/pretrain_apptainer.job`.
 
-## 4. Periodicity verification
+## 4. Periodicity-aware pretraining: what makes EchoFM different
 
-The pretrained embeddings are phase-aware: frames one cardiac cycle apart (same phase)
-are closer in embedding space than frames half a cycle apart (opposite phase).
+Generic video foundation models treat an echocardiogram as an arbitrary video.
+EchoFM additionally exploits the one structure every echo is guaranteed to have —
+the **cardiac cycle** — as free supervision:
+
+- **Spatio-temporally consistent masking** keeps the same spatial patches visible in
+  every frame, so the encoder must explain appearance changes through cardiac motion
+  rather than by copying from other locations.
+- **Periodic contrastive learning.** A pixel-space cycle-similarity prior (motion
+  component only; static anatomy is removed) defines which frame pairs share a cardiac
+  phase. A hard-mined triplet loss plus a dense similarity-distillation (KL) loss
+  transfer this periodic structure into the embedding space.
+
+The result: frame embeddings encode *where in the cardiac cycle* each frame lies —
+learned **without ECG, ED/ES labels, or segmentation**. End-diastole frames from
+different cycles (ED, ED′) embed close together, while ED vs. end-systole (ES),
+half a cycle apart, are pushed far apart:
 
 <img src="./figure/ed_es_periodicity.png" width="800px"></img>
 
-`notebooks/echofm_usage.ipynb` shows how to extract features for downstream tasks,
-run masked reconstruction, and reproduce this periodicity check.
+On held-out clips the embedding phase contrast is positive for 100% of clips and the
+embedding similarity structure matches the pixel-level cycle structure with r = 0.98.
+`notebooks/echofm_usage.ipynb` reproduces this check, along with feature extraction
+for downstream tasks and masked reconstruction.
 
 ## 5. Citation
-If you find this repository useful, please consider citing this paper: [will be released soon]
+If you find this repository useful, please consider citing our IEEE TMI paper:
 ```
-@article{kim2024echofm,
+@article{kim2025echofm,
   title={EchoFM: Foundation Model for Generalizable Echocardiogram Analysis},
   author={Kim, Sekeun and Jin, Pengfei and Song, Sifan and Chen, Cheng and Li, Yiwei and Ren, Hui and Li, Xiang and Liu, Tianming and Li, Quanzheng},
-  journal={arXiv preprint arXiv:2410.23413},
-  year={2024}
+  journal={IEEE Transactions on Medical Imaging},
+  volume={44},
+  number={10},
+  pages={4049--4062},
+  year={2025},
+  doi={10.1109/TMI.2025.3580713}
 }
 ```
