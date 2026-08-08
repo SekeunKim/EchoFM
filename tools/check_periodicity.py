@@ -233,10 +233,11 @@ def main():
                     os.path.join(args.out, f"match_{plotted:02d}.png"),
                 )
                 fig, axes = plt.subplots(1, 2, figsize=(8, 3.6))
+                vlo = min(offdiag(p).min(), offdiag(e).min())
                 for ax, m, title in zip(
                     axes, [p, e], ["pixel cycle similarity", "embedding similarity"]
                 ):
-                    im = ax.imshow(m, vmin=-1, vmax=1, cmap="RdBu_r")
+                    im = ax.imshow(m, vmin=vlo, vmax=1, cmap="RdBu_r")
                     ax.set_title(title, fontsize=9)
                     ax.set_xlabel("t token")
                 fig.colorbar(im, ax=axes, shrink=0.85)
