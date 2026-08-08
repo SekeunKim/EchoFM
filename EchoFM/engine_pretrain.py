@@ -117,6 +117,9 @@ def train_one_epoch(
         loss_value_reduce = misc.all_reduce_mean(loss_value)
         recon_reduce = misc.all_reduce_mean(recon_value)
         triplet_reduce = misc.all_reduce_mean(triplet_value)
+        # NB: must run on every rank (collective) — never move inside the
+        # rank-0-only log_writer branch or DDP deadlocks
+        triplet_active_reduce = misc.all_reduce_mean(triplet_active_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
@@ -128,9 +131,7 @@ def train_one_epoch(
             log_writer.add_scalar("train_loss_recon", recon_reduce, epoch_1000x)
             log_writer.add_scalar("train_loss_triplet", triplet_reduce, epoch_1000x)
             log_writer.add_scalar(
-                "train_triplet_active",
-                misc.all_reduce_mean(triplet_active_value),
-                epoch_1000x,
+                "train_triplet_active", triplet_active_reduce, epoch_1000x
             )
             log_writer.add_scalar("lr", lr, epoch_1000x)
 
