@@ -19,4 +19,6 @@ srun -p defq --gres=gpu:a100-40:1 --cpus-per-task=8 -t 40 -J "mm_fm_training::pr
       --data_path \$D --num_clips 16 --out $OUT/recon_ep$EP
     python tools/make_cycle_gif.py --ckpt $OUT/checkpoint-$EP.pth \
       --data_path \$D --num_clips 3 --out $OUT/cycle_gif_ep$EP
+    python tools/visualize_ed_es.py --ckpt $OUT/checkpoint-$EP.pth \
+      --data_path \$D --num_clips 24 --out $OUT/ed_es_ep$EP
   "

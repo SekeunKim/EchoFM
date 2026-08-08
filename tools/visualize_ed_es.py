@@ -48,9 +48,16 @@ def parse_args():
 
 
 def cavity_curve(imgs):
-    """Fraction of dark (cavity) pixels inside the scan cone, per frame."""
+    """Fraction of dark (cavity) pixels in the VENTRICULAR part of the cone.
+
+    Only the upper 55% of rows (apex side in standard display) is measured:
+    the atria fill during ventricular systole, so counting the whole sector
+    mixes anti-phase chambers and can invert the ED/ES labels.
+    """
     gray = imgs[0].mean(dim=0)  # [T, H, W]
+    H = gray.shape[-2]
     cone = gray.max(dim=0).values > 0.05
+    cone[int(0.55 * H):, :] = False
     dark = (gray < 0.15) & cone
     area = dark.flatten(1).sum(-1).float() / max(int(cone.sum()), 1)
     a = area.cpu().numpy()
@@ -58,17 +65,46 @@ def cavity_curve(imgs):
     return np.convolve(a, kernel, mode="same")
 
 
-def find_ed_es(area):
-    """ED = prominent local maxima (big cavity), ES = minima between them."""
+def cycle_length(imgs, lo=8, hi=28):
+    """Cardiac cycle length in frames from the frame-level pixel-similarity
+    lag curve: the reprise peak (first local max of similarity at lag >= lo)."""
+    import torch.nn.functional as _F
+
+    x = imgs[0].mean(dim=0)  # [Tf, H, W]
+    f = _F.adaptive_avg_pool2d(x.unsqueeze(1), (32, 32)).flatten(1)  # [Tf, 1024]
+    f = f - f.mean(dim=-1, keepdim=True)
+    f = _F.normalize(f, dim=-1)
+    S = (f @ f.T).cpu().numpy()
+    Tf = S.shape[0]
+    lags = range(1, Tf)
+    curve = np.array([np.mean(np.diag(S, k)) for k in lags])
+    hi = min(hi, Tf - 2)
+    if hi <= lo:
+        return None
+    seg = curve[lo - 1 : hi]
+    L = lo + int(np.argmax(seg))
+    # require a genuine reprise: similarity must dip before rising again
+    if curve[L - 1] <= curve[: lo - 1].min() + 1e-3:
+        return None
+    return L
+
+
+def find_ed_es(area, L=None):
+    """ED = cavity max; ED' = ED + cycle length (when known); ES = min between.
+
+    With a cycle-length estimate the second ED is *implied by periodicity*
+    instead of independently peak-picked, which is far more robust on noisy
+    cavity curves.
+    """
     T = len(area)
+    if L is not None and 4 < L < T:
+        ed1 = int(np.argmax(area[: T - L]))
+        ed2 = ed1 + L
+        es = ed1 + 1 + int(np.argmin(area[ed1 + 1 : ed2]))
+        return [ed1, ed2], es
+    # fallback: independent local maxima (previous behaviour)
     peaks = [i for i in range(1, T - 1)
              if area[i] >= area[i - 1] and area[i] >= area[i + 1]]
-    for edge in (0, T - 1):  # allow cycle endpoints
-        if not peaks or all(abs(edge - p) > 4 for p in peaks):
-            if (edge == 0 and area[0] > area[1]) or (
-                edge == T - 1 and area[-1] > area[-2]
-            ):
-                peaks.append(edge)
     peaks = sorted(peaks, key=lambda i: -area[i])
     eds = []
     for p in peaks:
@@ -78,8 +114,8 @@ def find_ed_es(area):
             break
     eds = sorted(eds)
     if len(eds) == 2:
-        lo, hi = eds
-        es = lo + int(np.argmin(area[lo:hi + 1]))
+        lo_, hi_ = eds
+        es = lo_ + int(np.argmin(area[lo_:hi_ + 1]))
     else:
         es = int(np.argmin(area))
     return eds, es
@@ -123,7 +159,8 @@ def main():
     for clip_i in picks:
         imgs = ds[int(clip_i)].unsqueeze(0).to(device)
         area = cavity_curve(imgs)
-        eds, es = find_ed_es(area)
+        L = cycle_length(imgs)
+        eds, es = find_ed_es(area, L)
         if len(eds) < 2:
             continue  # need two cycles for the ED-ED' comparison
         ed1, ed2 = eds
