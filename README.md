@@ -26,7 +26,7 @@ cd EchoFM
 
 ## 2. Download model
 Download the EchoFM weights from the following link:  
-[EchoFM Weights](https://drive.google.com/drive/folders/1Gn43_qMwk-wzZIxZdxXLyk2mXDv5Jsxt?usp=share_link)
+Pretrained weights are hosted on Hugging Face: [sekeun/EchoFM](https://huggingface.co/sekeun/EchoFM)
 
 ## 3. Self-supervised pretraining
 
@@ -52,7 +52,17 @@ Unit/smoke tests: `python tests/test_echofm.py [--cuda]`.
 
 A SLURM/apptainer launch script is provided in `cluster/pretrain_apptainer.job`.
 
-## 4. Citation
+## 4. Periodicity verification
+
+The pretrained embeddings are phase-aware: frames one cardiac cycle apart (same phase)
+are closer in embedding space than frames half a cycle apart (opposite phase).
+
+<img src="./figure/ed_es_periodicity.png" width="800px"></img>
+
+`notebooks/echofm_usage.ipynb` shows how to extract features for downstream tasks,
+run masked reconstruction, and reproduce this periodicity check.
+
+## 5. Citation
 If you find this repository useful, please consider citing this paper: [will be released soon]
 ```
 @article{kim2024echofm,

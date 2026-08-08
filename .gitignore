@@ -1,4 +1,5 @@
-__pycache__/
-*.pyc
-logs/
 .DS_Store
+logs/
+nb_pkgs/
+*.pyc
+__pycache__/
