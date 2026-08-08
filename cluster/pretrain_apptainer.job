@@ -31,6 +31,7 @@ TRIPLET_MARGIN="${ECHOFM_TRIPLET_MARGIN:-0.2}"
 PHASE_PRIOR="${ECHOFM_PHASE_PRIOR:-pixel}"
 CYCLE_W="${ECHOFM_CYCLE_W:-1.0}"
 CYCLE_TAU="${ECHOFM_CYCLE_TAU:-0.1}"
+PRIOR_ALPHA="${ECHOFM_PRIOR_ALPHA:-1.0}"
 RESUME="${ECHOFM_RESUME:-}"          # path to checkpoint to resume from
 RESUME_ARG=""
 [ -n "$RESUME" ] && RESUME_ARG="--resume $RESUME"
@@ -71,6 +72,7 @@ srun -N1 -n1 apptainer exec --nv --writable-tmpfs \
         --phase_prior $PHASE_PRIOR \
         --cycle_weight $CYCLE_W \
         --cycle_tau $CYCLE_TAU \
+        --prior_center_alpha $PRIOR_ALPHA \
         $RESUME_ARG \
         --epochs $EPOCHS \
         --warmup_epochs $WARMUP \

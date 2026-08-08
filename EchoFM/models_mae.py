@@ -48,6 +48,7 @@ class MaskedAutoencoderViT(nn.Module):
         phase_prior="pixel",
         cycle_weight=1.0,
         cycle_tau=0.1,
+        prior_center_alpha=1.0,
         **kwargs,
     ):
         super().__init__()
@@ -171,6 +172,7 @@ class MaskedAutoencoderViT(nn.Module):
         self.phase_prior = phase_prior
         self.cycle_weight = cycle_weight
         self.cycle_tau = cycle_tau
+        self.prior_center_alpha = prior_center_alpha
         # projector gets its own norm: sharing the encoder's final norm lets
         # recon statistics wash out the small frame-to-frame differences the
         # periodic branch must amplify
@@ -221,6 +223,11 @@ class MaskedAutoencoderViT(nn.Module):
             x = x.view(N, T, -1, x.shape[-2], x.shape[-1]).mean(dim=2)
             x = F.adaptive_avg_pool2d(x, (32, 32)).flatten(2)  # [N, T, 1024]
             x = x - x.mean(dim=-1, keepdim=True)
+            # remove the static (temporal-mean) component: anatomy dominates
+            # whole-frame similarity (~0.9 floor) and squeezes the phase
+            # signal into a tiny residual; centering leaves motion phase.
+            # ED/ES cross-cycle test: same accuracy, ~14x larger margin.
+            x = x - self.prior_center_alpha * x.mean(dim=1, keepdim=True)
             x = F.normalize(x, p=2, dim=-1)
             sim = torch.bmm(x, x.transpose(1, 2))
         return sim

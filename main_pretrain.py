@@ -100,6 +100,13 @@ def get_args_parser():
         type=float,
         help="softmax temperature for the cycle distillation loss",
     )
+    parser.add_argument(
+        "--prior_center_alpha",
+        default=1.0,
+        type=float,
+        help="fraction of the temporal-mean (static) component removed from "
+        "the pixel prior; 1.0 leaves pure motion phase",
+    )
 
     # Optimizer parameters
     parser.add_argument(
