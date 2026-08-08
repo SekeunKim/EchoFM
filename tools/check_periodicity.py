@@ -94,6 +94,90 @@ def lag_curve(sim):
     return [float(np.mean([sim[t, t + k] for t in range(T - k)])) for k in range(T)]
 
 
+def make_match_figure(imgs, prior_sim, embed_sim, clip_name, r, out_path):
+    """
+    Visual check that the similarity maps match the actual video: frame strip,
+    raw cardiac intensity signal, anchor-row similarity curves, and the frames
+    the pixel prior / embedding pick as best (same phase) vs worst match.
+
+    imgs: [3, T_frames, H, W] cpu tensor in [0,1]; prior_sim/embed_sim: [T,T] np
+    """
+    T = prior_sim.shape[0]
+    T_frames = imgs.shape[1]
+    grp = T_frames // T
+    thumbs = [
+        np.clip(imgs[:, t * grp + grp // 2].permute(1, 2, 0).numpy(), 0, 1)
+        for t in range(T)
+    ]
+    intensity = imgs.mean(dim=(0, 2, 3)).numpy()
+
+    # anchor = token whose prior row varies most (most phase-informative)
+    a = int(np.argmax([np.delete(prior_sim[t], t).var() for t in range(T)]))
+    idx = np.arange(T)
+    nonadj = np.abs(idx - a) > 1
+
+    def best(row):
+        return int(np.argmax(np.where(nonadj, row, -np.inf)))
+
+    def worst(row):
+        return int(np.argmin(np.where(nonadj, row, np.inf)))
+
+    bp, be, we = best(prior_sim[a]), best(embed_sim[a]), worst(embed_sim[a])
+
+    fig = plt.figure(figsize=(2.0 * T, 10))
+    gs = fig.add_gridspec(4, T, height_ratios=[1.6, 0.9, 0.9, 1.8], hspace=0.5)
+
+    for t in range(T):
+        ax = fig.add_subplot(gs[0, t])
+        ax.imshow(thumbs[t])
+        ax.axis("off")
+        marks = []
+        if t == a:
+            marks.append("ANCHOR")
+        if t == bp:
+            marks.append("pixel*")
+        if t == be:
+            marks.append("embed*")
+        if t == we:
+            marks.append("far")
+        ax.set_title(f"t{t} " + " ".join(marks), fontsize=8,
+                     color="tab:red" if t == a else "black")
+
+    ax = fig.add_subplot(gs[1, :])
+    ax.plot(np.arange(T_frames), intensity, "-", color="tab:gray")
+    for t in range(T + 1):
+        ax.axvline(t * grp - 0.5, color="0.88", lw=0.6)
+    ax.set_xlim(-0.5, T_frames - 0.5)
+    ax.set_title("cardiac signal: mean frame intensity (raw 32 frames)", fontsize=9)
+
+    ax = fig.add_subplot(gs[2, :])
+    ax.plot(idx, prior_sim[a], "o-", label="pixel prior")
+    ax.plot(idx, embed_sim[a], "s-", label="embedding")
+    ax.axvline(a, color="k", ls=":", lw=1)
+    ax.scatter([bp], [prior_sim[a, bp]], marker="*", s=160, color="tab:blue", zorder=5)
+    ax.scatter([be], [embed_sim[a, be]], marker="*", s=160, color="tab:orange", zorder=5)
+    ax.legend(fontsize=8, loc="lower right")
+    ax.set_xlabel("t token", fontsize=8)
+    ax.set_title(f"similarity to anchor t{a}", fontsize=9)
+
+    panels = [
+        (a, f"anchor t{a}"),
+        (bp, f"pixel best t{bp}"),
+        (be, f"embed best t{be}"),
+        (we, f"embed worst t{we}"),
+    ]
+    span = max(T // 4, 1)
+    for i, (t, name) in enumerate(panels):
+        ax = fig.add_subplot(gs[3, i * span : (i + 1) * span])
+        ax.imshow(thumbs[t])
+        ax.axis("off")
+        ax.set_title(name, fontsize=9)
+
+    fig.suptitle(f"{clip_name}  r={r:.2f}", fontsize=10)
+    fig.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     args = parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -144,6 +228,10 @@ def main():
             pix_lags.append(lag_curve(p))
 
             if plotted < args.num_plot:
+                make_match_figure(
+                    imgs[j].cpu(), p, e, results[-1]["clip"], r,
+                    os.path.join(args.out, f"match_{plotted:02d}.png"),
+                )
                 fig, axes = plt.subplots(1, 2, figsize=(8, 3.6))
                 for ax, m, title in zip(
                     axes, [p, e], ["pixel cycle similarity", "embedding similarity"]
