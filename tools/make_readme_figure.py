@@ -50,10 +50,8 @@ def is_bmode(imgs):
 
 
 def render(frames, area, ed1, es, ed2, e_same, e_opp, path):
-    fig = plt.figure(figsize=(11.5, 8.2), facecolor="white")
-    gs = fig.add_gridspec(
-        3, 3, height_ratios=[0.95, 2.6, 0.75], hspace=0.42, wspace=0.06
-    )
+    fig = plt.figure(figsize=(11.5, 7.2), facecolor="white")
+    gs = fig.add_gridspec(2, 3, height_ratios=[0.95, 2.6], hspace=0.42, wspace=0.06)
 
     ax = fig.add_subplot(gs[0, :])
     t = np.arange(len(area))
@@ -92,25 +90,10 @@ def render(frames, area, ed1, es, ed2, e_same, e_opp, path):
         ax.set_xticks([])
         ax.set_yticks([])
 
-    ax = fig.add_subplot(gs[2, :])
-    ax.barh([1, 0], [e_same, e_opp], height=0.55,
-            color=["#2e7d32", "#b0bec5"], alpha=0.9)
-    ax.set_yticks([1, 0])
-    ax.set_yticklabels(["sim(ED, ED′)  same phase", "sim(ED, ES)  opposite phase"],
-                       fontsize=11)
-    for y, v in [(1, e_same), (0, e_opp)]:
-        ax.text(v + (0.02 if v >= 0 else -0.02), y, f"{v:+.2f}",
-                va="center", ha="left" if v >= 0 else "right",
-                fontsize=11, fontweight="bold",
-                color="#2e7d32" if y == 1 else "#546e7a")
-    ax.axvline(0, color="#90a4ae", lw=1)
-    lo = min(0.0, e_opp) - 0.15
-    ax.set_xlim(lo, max(e_same, 0) + 0.18)
-    ax.set_title("embedding cosine similarity — same cardiac phase is closer",
-                 fontsize=11, color="#37474f")
-    for s in ax.spines.values():
-        s.set_visible(False)
-    ax.tick_params(axis="x", labelsize=8, colors="#607d8b")
+    fig.text(0.5, 0.015,
+             f"embedding cosine similarity:   sim(ED, ED′) = {e_same:+.2f}   ·   "
+             f"sim(ED, ES) = {e_opp:+.2f}   —   same cardiac phase is closer",
+             ha="center", fontsize=11.5, color="#37474f")
 
     fig.suptitle("EchoFM embeddings are cardiac-phase aware", fontsize=14,
                  fontweight="bold", color="#263238", y=0.985)
@@ -151,8 +134,13 @@ def main():
         tk = lambda f: min(f // 4, 7)
         if len({tk(ed1), tk(ed2), tk(es)}) < 3:
             continue
-        # require visible contraction in the cavity curve
-        if area[ed1] - area[es] < 0.03 or area[ed2] - area[es] < 0.03:
+        # visual clarity first: strong fractional contraction of the cavity
+        contraction = min(area[ed1], area[ed2]) - area[es]
+        frac = contraction / max(area[ed1], 1e-6)
+        if frac < 0.2:
+            continue
+        # visible image (not too dark)
+        if float(imgs.mean()) < 0.07:
             continue
         e = embed_sim_map(model, imgs)
         e_same = float(e[tk(ed1), tk(ed2)])
@@ -162,10 +150,11 @@ def main():
         # keep the exact sampled window: the dataset draws a random temporal
         # window per __getitem__, so re-loading would desync frames and labels
         candidates.append(
-            (e_same - e_opp, int(clip_i), ed1, es, ed2, e_same, e_opp,
+            (frac, int(clip_i), ed1, es, ed2, e_same, e_opp,
              imgs[0].cpu(), area)
         )
 
+    # rank by visual contraction, not embedding gap
     candidates.sort(key=lambda c: -c[0])
     print(f"{len(candidates)} strong B-mode candidates")
     for rank, (gap, clip_i, ed1, es, ed2, e_same, e_opp, imgs_c, area) in enumerate(

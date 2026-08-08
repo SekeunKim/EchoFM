@@ -1,7 +1,6 @@
 # EchoFM: A Video Vision Foundation Model for Echocardiography
 
 [![IEEE TMI](https://img.shields.io/badge/IEEE%20TMI-10.1109%2FTMI.2025.3580713-00629B)](https://ieeexplore.ieee.org/document/11040094)
-[![arXiv](https://img.shields.io/badge/arXiv-2410.23413-b31b1b)](https://arxiv.org/abs/2410.23413)
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-sekeun%2FEchoFM-FFD21E)](https://huggingface.co/sekeun/EchoFM)
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-lightgrey)](#license)
 
@@ -28,16 +27,19 @@ disease-detection tasks.
 
 ## How it works
 
-On top of a video MAE (75% masking, per-patch normalized targets), EchoFM adds two
-cycle-aware components:
+EchoFM's pretraining couples masked video modeling with the physiology of the beating
+heart. The objective rests on two pillars designed for echocardiography:
 
-- **Spatio-temporally consistent masking** — one spatial mask shared across all
-  frames, so the encoder must explain appearance changes through cardiac motion
-  rather than by copying from unmasked locations in other frames.
-- **Periodic contrastive learning** — a pixel-space cycle-similarity prior (motion
-  component only; the static anatomy component is removed) defines which frame pairs
-  share a cardiac phase. A hard-mined triplet loss and a dense similarity-distillation
-  (KL) loss transfer this periodic structure into the embedding space.
+- **Spatio-temporally consistent masked reconstruction.** One spatial mask is shared
+  across every frame of the clip (75% masking, per-patch normalized targets), so a
+  masked region stays hidden for the whole video. Reconstructing it forces the encoder
+  to model how cardiac motion deforms anatomy over time — copying the same patch from
+  a neighboring frame is impossible by construction.
+- **Periodic contrastive learning.** The cardiac cycle itself provides the supervision:
+  a pixel-space cycle-similarity prior (motion component only; the static anatomy
+  component is removed) identifies which frame pairs share a cardiac phase. A
+  hard-mined triplet loss and a dense similarity-distillation (KL) loss imprint this
+  periodic structure onto the embedding space.
 
 The result is directly measurable: end-diastole frames from *different* cycles
 (ED, ED′) embed close together, while ED vs. end-systole (ES) — half a cycle apart —
