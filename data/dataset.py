@@ -487,9 +487,12 @@ class EchoDataset_from_Video_mp4(Dataset):
 
 class EchoDataset_from_cache_npy(Dataset):
     """
-    Pretraining dataset over a directory of cached echo clips stored as .npy
-    arrays of shape (T, H, W, 3) uint8 (BGR, as produced by the DICOM cache
-    pipeline) or (T, H, W) grayscale.
+    Pretraining dataset over one or more directories of cached echo clips
+    stored as .npy arrays of shape (T, H, W, 3) uint8 (BGR, as produced by
+    the DICOM cache pipeline) or (T, H, W) grayscale.
+
+    `folder` may be a single path, a comma-separated string of paths, or a
+    list of paths.
 
     Returns float tensors (3, num_frames, image_size, image_size) in [0, 1].
     """
@@ -503,18 +506,26 @@ class EchoDataset_from_cache_npy(Dataset):
         channel_order="bgr",
     ):
         super().__init__()
-        self.folder = folder
+        if isinstance(folder, str):
+            folders = [f for f in folder.split(",") if f]
+        else:
+            folders = list(folder)
+        self.folders = folders
         self.num_frames = num_frames
         self.image_size = image_size
         self.frame_stride = frame_stride
         self.channel_order = channel_order
 
-        self.paths = sorted(
-            f for f in os.listdir(folder) if f.endswith(".npy")
-        )
+        self.paths = []
+        for d in folders:
+            files = sorted(
+                os.path.join(d, f) for f in os.listdir(d) if f.endswith(".npy")
+            )
+            print(f"{len(files)} cached clips found at {d}")
+            self.paths.extend(files)
         if len(self.paths) == 0:
-            raise RuntimeError(f"no .npy clips found in {folder}")
-        print(f"{len(self.paths)} cached clips found at {folder}")
+            raise RuntimeError(f"no .npy clips found in {folders}")
+        print(f"{len(self.paths)} cached clips total")
 
     def __len__(self):
         return len(self.paths)
@@ -544,13 +555,12 @@ class EchoDataset_from_cache_npy(Dataset):
         return tensor
 
     def __getitem__(self, index):
-        path = os.path.join(self.folder, self.paths[index])
         try:
-            return self._load(path)
+            return self._load(self.paths[index])
         except Exception as e:
             print(f"[EchoDataset_npy] {e}; resampling")
             alt = random.randint(0, len(self.paths) - 1)
-            return self._load(os.path.join(self.folder, self.paths[alt]))
+            return self._load(self.paths[alt])
         
          
 class EchoDataset_from_Video(Dataset):

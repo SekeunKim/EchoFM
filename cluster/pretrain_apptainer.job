@@ -18,7 +18,8 @@ WORKSPACE=/home/sk1064/workspace
 SIF=$WORKSPACE/lvfp/sk1064_lvfp.sif
 EXTRA_PKGS=$WORKSPACE/lvfp/extra_pkgs
 CODE_DIR=$WORKSPACE/EchoFM_gh
-DATA_DIR="${ECHOFM_DATA_DIR:-/mnt/weka/wekafs/mm_fm_training/echo_pretrain_apical2/clips}"
+# comma-separated list of clip directories (echo_pretrain_apical2 + MIMIC-ECHO cache)
+DATA_DIR="${ECHOFM_DATA_DIR:-/mnt/weka/wekafs/mm_fm_training/echo_pretrain_apical2/clips,/mnt/weka/wekafs/mm_fm_training/MIMIC-ECHO/cache_apical}"
 
 NGPU="${ECHOFM_NGPU:-8}"
 BATCH="${ECHOFM_BATCH:-8}"          # per-GPU; ~30 GB on A100-40 (16.9 GB @ batch 4 measured)
