@@ -68,12 +68,14 @@ def train_one_epoch(
             samples = samples.reshape(b * r, c, t, h, w)
 
         with torch.cuda.amp.autocast(enabled=not fp32):
-            loss, _, _ = model(
+            loss, _, _, loss_parts = model(
                 samples,
                 mask_ratio=args.mask_ratio,
             )
 
         loss_value = loss.item()
+        recon_value = loss_parts["recon"].item()
+        triplet_value = loss_parts["triplet"].item()
 
         if not math.isfinite(loss_value):
             for _ in range(args.num_checkpoint_del):
@@ -100,6 +102,8 @@ def train_one_epoch(
         torch.cuda.synchronize()
 
         metric_logger.update(loss=loss_value)
+        metric_logger.update(recon=recon_value)
+        metric_logger.update(triplet=triplet_value)
         metric_logger.update(cpu_mem=misc.cpu_mem_usage()[0])
         metric_logger.update(cpu_mem_all=misc.cpu_mem_usage()[1])
         metric_logger.update(gpu_mem=misc.gpu_mem_usage())
@@ -109,6 +113,8 @@ def train_one_epoch(
         metric_logger.update(lr=lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
+        recon_reduce = misc.all_reduce_mean(recon_value)
+        triplet_reduce = misc.all_reduce_mean(triplet_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
@@ -117,6 +123,8 @@ def train_one_epoch(
                 (data_iter_step / len(data_loader) + epoch) * 1000 * args.repeat_aug
             )
             log_writer.add_scalar("train_loss", loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar("train_loss_recon", recon_reduce, epoch_1000x)
+            log_writer.add_scalar("train_loss_triplet", triplet_reduce, epoch_1000x)
             log_writer.add_scalar("lr", lr, epoch_1000x)
 
     # gather the stats from all processes

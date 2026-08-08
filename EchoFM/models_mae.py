@@ -190,53 +190,63 @@ class MaskedAutoencoderViT(nn.Module):
 
     def triplet_sampling(self, similarity_map, cls_tokens):
         """
-        Perform triplet sampling with one anchor, one positive, and one negative per batch.
+        Periodic-driven triplet sampling (EchoFM Sec. 3): every temporal index
+        serves as an anchor; positives are frames whose similarity to the anchor
+        is above the anchor row's mean (same cardiac phase), negatives are
+        below-threshold frames with temporally adjacent frames excluded.
 
         Args:
             similarity_map (tensor): Self-similarity map of shape [N, T, T].
-            cls_tokens (tensor): Tensor of CLS tokens, shape [N, T, D].
+            cls_tokens (tensor or list): CLS tokens, shape [N, T, D].
 
         Returns:
-            anchor (tensor): Tensor of anchor embeddings, shape [N, D].
-            positive (tensor): Tensor of positive embeddings, shape [N, D].
-            negative (tensor): Tensor of negative embeddings, shape [N, D].
+            (anchor, positive, negative) each of shape [M, D], or None when no
+            valid triplet exists in the batch.
         """
-        
-        cls_tokens = torch.stack(cls_tokens, dim=1)  # Shape: [N, T, D]
-         
+        if isinstance(cls_tokens, (list, tuple)):
+            cls_tokens = torch.stack(cls_tokens, dim=1)  # [N, T, D]
+
         N, T, D = cls_tokens.shape
+        device = cls_tokens.device
+        idx = torch.arange(T, device=device)
 
         anchors, positives, negatives = [], [], []
 
-        for n in range(N):  # Iterate over batches
-            # Extract the first row (anchor is always index 0)
-            first_row = similarity_map[n, 0, :]  # Shape: [T]
+        for n in range(N):
+            for t in range(T):
+                row = similarity_map[n, t, :]  # [T]
+                not_self = idx != t
+                # mean similarity excluding the anchor itself
+                mean_similarity = row[not_self].mean()
 
-            # Compute mean similarity for the first row
-            mean_similarity = first_row.mean().item()
+                pos_mask = (row > mean_similarity) & not_self
+                # frames right next to the anchor are trivially similar:
+                # keep them out of the negative set
+                non_adjacent = (idx - t).abs() > 1
+                neg_mask = (row <= mean_similarity) & not_self & non_adjacent
 
-            # Identify positive and negative indices, excluding anchor index (0)
-            positive_indices = (first_row > mean_similarity).nonzero(as_tuple=True)[0]
-            positive_indices = positive_indices[positive_indices != 0]  # Exclude anchor (index 0)
+                positive_indices = pos_mask.nonzero(as_tuple=True)[0]
+                negative_indices = neg_mask.nonzero(as_tuple=True)[0]
+                if len(positive_indices) == 0 or len(negative_indices) == 0:
+                    continue
 
-            negative_indices = (first_row <= mean_similarity).nonzero(as_tuple=True)[0]
-            negative_indices = negative_indices[negative_indices != 0]  # Exclude anchor (index 0)
+                pos_idx = positive_indices[
+                    torch.randint(len(positive_indices), (1,), device=device)
+                ].item()
+                neg_idx = negative_indices[
+                    torch.randint(len(negative_indices), (1,), device=device)
+                ].item()
 
-            # Ensure we have at least one positive and one negative
-            if len(positive_indices) > 0 and len(negative_indices) > 0:
-                # Randomly select one positive and one negative
-                pos_idx = positive_indices[torch.randint(len(positive_indices), (1,))].item()
-                neg_idx = negative_indices[torch.randint(len(negative_indices), (1,))].item()
+                anchors.append(cls_tokens[n, t, :])
+                positives.append(cls_tokens[n, pos_idx, :])
+                negatives.append(cls_tokens[n, neg_idx, :])
 
-                # Append CLS tokens for the selected indices
-                anchors.append(cls_tokens[n, 0, :])  # Anchor is always index 0
-                positives.append(cls_tokens[n, pos_idx, :])  # Positive CLS token
-                negatives.append(cls_tokens[n, neg_idx, :])  # Negative CLS token
+        if len(anchors) == 0:
+            return None
 
-        # Stack tensors to create final batch outputs
-        anchor = torch.stack(anchors)  # Shape: [N, D]
-        positive = torch.stack(positives)  # Shape: [N, D]
-        negative = torch.stack(negatives)  # Shape: [N, D]
+        anchor = torch.stack(anchors)
+        positive = torch.stack(positives)
+        negative = torch.stack(negatives)
 
         return anchor, positive, negative
     
@@ -313,46 +323,49 @@ class MaskedAutoencoderViT(nn.Module):
 
     def uniform_random_masking(self, x, mask_ratio, L):
         """
-        Perform temporal consistent random masking by sampling the same spatial tokens across time steps.
+        Spatio-temporal consistent masking (EchoFM Sec. 3): sample one spatial
+        mask per video and share it across every temporal index, so the visible
+        patch locations are identical for all frames (M_{t,i} constant in t).
+
         Args:
-            x: Tensor of shape [N, T * L, D], sequence after patch embedding (flattened temporal and spatial dimensions).
-            mask_ratio: Float, proportion of tokens to mask.
+            x: Tensor of shape [N, T * L, D], sequence after patch embedding
+               (temporal-major flattening).
+            mask_ratio: Float, proportion of spatial tokens to mask.
             L: Number of spatial tokens per time step.
 
         Returns:
-            x_masked: Tensor of shape [N, len_keep * T, D], after masking.
+            x_masked: Tensor of shape [N, T * len_keep, D], kept tokens in
+                      ascending original order.
             mask: Binary mask of shape [N, T * L], 0 is keep, 1 is remove.
-            ids_restore: Indices to restore original sequence order.
-            ids_keep: Indices of kept tokens.
+            ids_restore: Inverse permutation mapping [kept..., masked...] back
+                         to the original token order (for the decoder).
+            ids_keep: Global indices (in [0, T*L)) of kept tokens, [N, T*len_keep].
         """
         N, TL, D = x.shape  # Batch size, total tokens, embedding dimension
         T = TL // L  # Temporal length
-
-        # Compute the number of tokens to keep per spatial location
         len_keep = int(L * (1 - mask_ratio))
 
-        # Generate random noise for each spatial location
+        # One spatial mask per sample, shared across all time steps
         noise = torch.rand(N, L, device=x.device)  # [N, L]
+        ids_keep_spatial = torch.argsort(noise, dim=1)[:, :len_keep]  # [N, len_keep]
+        ids_keep_spatial, _ = torch.sort(ids_keep_spatial, dim=1)
 
-        # Sort spatial tokens based on noise
-        ids_shuffle = torch.argsort(noise, dim=1)  # [N, L]
-        ids_keep = ids_shuffle[:, :len_keep]  # Keep top len_keep indices [N, len_keep]
-        ids_keep = ids_keep.unsqueeze(1).repeat(1, T, 1)  # Broadcast to all time steps [N, T, len_keep]
+        # Broadcast to global token indices: token (t, s) lives at t * L + s
+        offsets = torch.arange(T, device=x.device).view(1, T, 1) * L
+        ids_keep = (ids_keep_spatial.unsqueeze(1) + offsets).reshape(N, T * len_keep)
 
-        # Create a binary mask for all time steps
-        mask = torch.ones(N, T, L, device=x.device)  # Initialize mask with all 1s [N, T, L]
-        
-        for n in range(N):  # Iterate over batch
-            for t in range(T):
-                mask[n, t, ids_keep[n]] = 0  # Use batch-specific ids_keep[n]
+        x_masked = torch.gather(
+            x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D)
+        )  # [N, T * len_keep, D]
 
-        mask = mask.view(N, TL)  # Flatten to [N, T * L]
-        ids_restore = torch.argsort(mask, dim=1)  # Indices for restoring order
+        mask = torch.ones(N, TL, device=x.device)
+        mask.scatter_(1, ids_keep, 0.0)
 
-        # Mask input
-        x_masked = x[mask == 0].view(N, -1, D)  # Kept tokens only [N, len_keep * T, D]
+        # ids_shuffle lists kept positions (ascending) then masked positions,
+        # matching the [x_masked, mask_tokens] concatenation in the decoder.
+        ids_shuffle = torch.argsort(mask, dim=1, stable=True)
+        ids_restore = torch.argsort(ids_shuffle, dim=1)
 
-        ids_keep = ids_keep.view(N, -1)
         return x_masked, mask, ids_restore, ids_keep
 
     def random_masking(self, x, mask_ratio):
@@ -471,28 +484,33 @@ class MaskedAutoencoderViT(nn.Module):
             print ('CLS token is needed')
         
     
-    def forward_prj(self, x, ids_restore):
-        N = x.shape[0]
+    def forward_prj(self, x):
+        """
+        Shared-weight ViT projector: for each temporal index, prepend a CLS
+        token to that frame's visible tokens and run one transformer block;
+        the output CLS embedding summarizes the frame for the periodic
+        contrastive loss.
+
+        Args:
+            x: encoder output of shape [N, T * len_keep, C]
+        Returns:
+            list of T tensors, each [N, C]
+        """
+        N, S, C = x.shape
         T = self.patch_embed.t_grid_size
-        H = W = self.patch_embed.grid_size
-        
-        # embed tokens (divide to temporal)
-        
-        # x = 4 392 1024 
-        
-        # x = reshape() -> 4 8 49 1024
-        x = x.view(N, T, 49, 1024) 
-        
+        assert S % T == 0, f"token count {S} not divisible by t_grid_size {T}"
+        x = x.view(N, T, S // T, C)
+
         cls_ = []
         for i in range(T):
-            x_t = x[:,i,:,:]
-            
+            x_t = x[:, i, :, :]
+
             if self.cls_embed:
                 decoder_cls_token = self.decoder_prj_cls_token
                 decoder_cls_tokens = decoder_cls_token.expand(x.shape[0], -1, -1)
                 x_t = torch.cat((decoder_cls_tokens, x_t), dim=1)
-                 
-            x_t_cls = self.decoder_prj(x_t) #vit
+
+            x_t_cls = self.decoder_prj(x_t)  # shared-weight ViT block
             cls_.append(x_t_cls)
         return cls_
     
@@ -600,21 +618,30 @@ class MaskedAutoencoderViT(nn.Module):
 
     def forward(self, imgs, mask_ratio=0.75):
         latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        
-        cls_tokens = self.forward_prj(latent, ids_restore)
-        
+
+        # periodic-driven contrastive branch (per-frame CLS via shared projector)
+        cls_tokens = self.forward_prj(latent)
+        cls_stack = torch.stack(cls_tokens, dim=1)  # [N, T, C]
+
         similarity_map = self.self_similarity(cls_tokens)
-        
-        anchor, positive, negative = self.triplet_sampling(similarity_map, cls_tokens)
-        
-        # triplet sampling
-        triplet_loss = self.triplet_loss(anchor, positive, negative)
-        
-        pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
-        loss = self.forward_loss(imgs, pred, mask)
-        
-        loss = loss + triplet_loss
-        return loss, pred, mask
+        triplet = self.triplet_sampling(similarity_map, cls_stack)
+        if triplet is not None:
+            anchor, positive, negative = triplet
+            triplet_loss = self.triplet_loss(anchor, positive, negative)
+        else:
+            # keep the projector in the autograd graph so DDP gradient
+            # reduction stays consistent across ranks
+            triplet_loss = cls_stack.sum() * 0.0
+
+        pred = self.forward_decoder(latent, ids_restore)  # [N, L, u*p*p*3]
+        recon_loss = self.forward_loss(imgs, pred, mask)
+
+        loss = recon_loss + triplet_loss
+        loss_parts = {
+            "recon": recon_loss.detach(),
+            "triplet": triplet_loss.detach(),
+        }
+        return loss, pred, mask, loss_parts
 
 
 def mae_vit_base_patch16(**kwargs):

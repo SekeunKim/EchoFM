@@ -14,22 +14,18 @@ import json
 import os
 import time
 
-# import mae_st.util.env
-
-import mae_st.util.misc as misc
+import EchoFM.util.misc as misc
 
 import numpy as np
-# import timm
 import torch
 import torch.backends.cudnn as cudnn
 from iopath.common.file_io import g_pathmgr as pathmgr
-from mae_st import models_mae
-from mae_st.engine_pretrain import train_one_epoch
-from mae_st.util.misc import NativeScalerWithGradNormCount as NativeScaler
+from EchoFM import models_mae
+from EchoFM.engine_pretrain import train_one_epoch
+from EchoFM.util.misc import NativeScalerWithGradNormCount as NativeScaler
 
 from torch.utils.tensorboard import SummaryWriter
-from data.dataset import EchoDataset_from_Video_mp4
-import torch.distributed as dist
+from data.dataset import EchoDataset_from_Video_mp4, EchoDataset_from_cache_npy
 
 
 def get_args_parser():
@@ -115,7 +111,19 @@ def get_args_parser():
     parser.add_argument(
         "--data_path",
         default="/raid/camca/sk1064/us/fullset/video/",
-        help="path where to save, empty for no saving",
+        help="directory containing pretraining clips",
+    )
+    parser.add_argument(
+        "--data_source",
+        default="mp4",
+        choices=["mp4", "npy"],
+        help="mp4: folder of video files; npy: folder of cached (T,H,W,3) uint8 .npy clips",
+    )
+    parser.add_argument(
+        "--frame_stride",
+        default=1,
+        type=int,
+        help="temporal stride when sampling num_frames from a clip",
     )
     parser.add_argument(
         "--log_dir",
@@ -210,24 +218,9 @@ def get_args_parser():
 
 
 def main(args):
+    # handles torchrun (RANK/WORLD_SIZE/LOCAL_RANK env), SLURM, and
+    # single-process fallback; sets args.distributed / args.gpu accordingly
     misc.init_distributed_mode(args)
-
-    print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
-    print("{}".format(args).replace(", ", ",\n"))
-
-    # 멀티 GPU 초기화
-    # if args.distributed:
-    #     dist.init_process_group(backend="nccl", init_method=args.dist_url, rank=args.local_rank, world_size=args.world_size)
-    #     torch.cuda.set_device(args.local_rank)
-    if args.distributed:
-        if not dist.is_initialized():  # 이미 초기화된 경우 중복 호출 방지
-            dist.init_process_group(
-                backend="nccl", 
-                init_method=args.dist_url, 
-                rank=args.local_rank, 
-                world_size=args.world_size
-            )
-        torch.cuda.set_device(args.local_rank)
 
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
     print("{}".format(args).replace(", ", ",\n"))
@@ -241,8 +234,21 @@ def main(args):
 
     cudnn.benchmark = True
 
-    dataset_train = EchoDataset_from_Video_mp4(args.data_path)
-    
+    if args.data_source == "npy":
+        dataset_train = EchoDataset_from_cache_npy(
+            args.data_path,
+            num_frames=args.num_frames,
+            image_size=args.input_size,
+            frame_stride=args.frame_stride,
+        )
+    else:
+        dataset_train = EchoDataset_from_Video_mp4(
+            args.data_path,
+            image_size=[args.input_size, args.input_size],
+            num_frames=args.num_frames,
+            frame_stride=args.frame_stride,
+        )
+
     if args.distributed:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
@@ -255,6 +261,8 @@ def main(args):
         global_rank = 0
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
 
+    if not args.log_dir:
+        args.log_dir = os.path.join(args.output_dir, "tb")
     if global_rank == 0 and args.log_dir is not None:
         try:
             pathmgr.mkdirs(args.log_dir)
@@ -396,3 +404,11 @@ def launch_one_thread(
     args.output_dir = output_path
     output = main(args)
     stats_queue.put(output)
+
+if __name__ == "__main__":
+    from pathlib import Path
+
+    args = get_args_parser().parse_args()
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    main(args)

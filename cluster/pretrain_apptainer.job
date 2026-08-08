@@ -1,0 +1,68 @@
+#!/bin/bash
+#SBATCH -J mm_fm_training::proj=IRB2025P001686,
+#SBATCH -p defq
+#SBATCH --gres=gpu:a100-40:8
+#SBATCH -t 5000:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=64
+#SBATCH --output=/home/sk1064/workspace/EchoFM_gh/logs/pretrain-%j.out
+
+# EchoFM (arXiv 2410.23413) MAE + periodic-contrastive pretraining on the
+# brainmaker cluster. Launch recipe follows lvfp/EchoFM++/main_apptainer.job
+# (apptainer module, --nv GL fix, weka bind, extra_pkgs PYTHONPATH).
+
+module load apptainer/apptainer.module
+
+WORKSPACE=/home/sk1064/workspace
+SIF=$WORKSPACE/lvfp/sk1064_lvfp.sif
+EXTRA_PKGS=$WORKSPACE/lvfp/extra_pkgs
+CODE_DIR=$WORKSPACE/EchoFM_gh
+DATA_DIR="${ECHOFM_DATA_DIR:-/mnt/weka/wekafs/mm_fm_training/echo_pretrain_apical2/clips}"
+
+NGPU="${ECHOFM_NGPU:-8}"
+BATCH="${ECHOFM_BATCH:-8}"          # per-GPU; ~30 GB on A100-40 (16.9 GB @ batch 4 measured)
+EPOCHS="${ECHOFM_EPOCHS:-100}"
+WARMUP="${ECHOFM_WARMUP:-10}"
+BLR="${ECHOFM_BLR:-1e-3}"
+RUN_TAG="${ECHOFM_RUN_TAG:-echofm_mae_vitl_f32_$(date +%m%d)}"
+OUT_DIR=$CODE_DIR/logs/$RUN_TAG
+RDZV_PORT=$((10000 + SLURM_JOB_ID % 50000))
+
+mkdir -p $OUT_DIR
+
+srun -N1 -n1 apptainer exec --nv --writable-tmpfs \
+  --bind $WORKSPACE:$WORKSPACE \
+  --bind /mnt/weka/wekafs/mm_fm_training:/mnt/weka/wekafs/mm_fm_training \
+  "$SIF" bash -lc "
+    cd $CODE_DIR
+    # --nv injects host GL libs needing GLIBC_2.38 > container glibc, which
+    # breaks 'import cv2'. Put the container's own /usr/lib GL libs first.
+    export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH
+    export PYTHONPATH=$EXTRA_PKGS:\$PYTHONPATH
+    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    export PYTHONUNBUFFERED=1
+    torchrun \
+      --nproc_per_node=$NGPU \
+      --standalone \
+      --master_port=$RDZV_PORT \
+      main_pretrain.py \
+        --data_source npy \
+        --data_path $DATA_DIR \
+        --model mae_vit_large_patch16 \
+        --batch_size $BATCH \
+        --num_frames 32 \
+        --t_patch_size 4 \
+        --pred_t_dim 8 \
+        --frame_stride 1 \
+        --mask_ratio 0.75 \
+        --epochs $EPOCHS \
+        --warmup_epochs $WARMUP \
+        --blr $BLR \
+        --weight_decay 0.05 \
+        --clip_grad 0.02 \
+        --num_workers 6 \
+        --checkpoint_period 10 \
+        --output_dir $OUT_DIR \
+        --log_dir $OUT_DIR/tb
+  "
