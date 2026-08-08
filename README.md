@@ -7,10 +7,17 @@
 Official repository for **[EchoFM: Foundation Model for Generalizable Echocardiogram Analysis](https://ieeexplore.ieee.org/document/11040094)** (IEEE Transactions on Medical Imaging, 2025).
 
 EchoFM is a ViT-L video foundation model pretrained on echocardiogram clips with a
-self-supervised objective built around the **cardiac cycle** — the one structure every
-echo is guaranteed to have. The pretrained encoder produces video-, frame-, and
-token-level representations that transfer to segmentation, classification, and
-disease-detection tasks.
+self-supervised objective built around the **cardiac cycle**. Periodicity is not a
+side detail of echocardiography — it is the reason echo is acquired the way it is:
+every view is recorded over multiple heartbeats, because any single frame is corrupted
+by speckle noise, probe motion, and breathing, and clinicians read measurements
+(EF, wall motion, valve function) *across* cycles at matched phases. Frames at the
+same cardiac phase in different cycles are therefore natural repeated measurements of
+the same anatomy. EchoFM turns this clinical redundancy into free supervision: pulling
+same-phase frames together and pushing opposite-phase frames apart yields
+representations that are robust to per-frame noise and explicitly encode cardiac
+phase. The pretrained encoder produces video-, frame-, and token-level representations
+that transfer to segmentation, classification, and disease-detection tasks.
 
 <img src="./figure/fig1.png" width="800px"></img>
 
