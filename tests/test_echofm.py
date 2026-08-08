@@ -132,16 +132,39 @@ def test_pixel_similarity_periodicity(device):
     print("[ok] pixel_similarity captures cycle periodicity")
 
 
-def test_periodic_triplet_loss(device):
+def test_periodic_losses(device):
     model = make_tiny(device)
     imgs = _periodic_video(2, 8, 64, period=4, device=device)
     cls_stack = torch.randn(2, 4, 64, device=device, requires_grad=True)
-    loss, active = model.periodic_triplet_loss(imgs, cls_stack)
-    assert torch.isfinite(loss) and loss.item() > 0, "triplet dead at init"
+    triplet, cycle, active = model.periodic_losses(imgs, cls_stack)
+    assert torch.isfinite(triplet) and triplet.item() > 0, "triplet dead at init"
+    assert torch.isfinite(cycle) and cycle.item() > 0
     assert 0.0 < active.item() <= 1.0
-    loss.backward()
+    (triplet + cycle).backward()
     assert cls_stack.grad is not None and torch.isfinite(cls_stack.grad).all()
-    print(f"[ok] periodic_triplet_loss (loss={loss.item():.4f}, active={active.item():.2f})")
+    print(f"[ok] periodic_losses (triplet={triplet.item():.4f}, "
+          f"cycle={cycle.item():.4f}, active={active.item():.2f})")
+
+
+def test_cycle_distill_anticollapse(device):
+    model = make_tiny(device)
+    imgs = _periodic_video(2, 8, 64, period=4, device=device)
+    prior = model.pixel_similarity(imgs)  # structured [N, 4, 4]
+
+    # collapsed embeddings: identical vectors -> uniform embed_sim rows.
+    # the KL to the structured prior must stay positive WITH gradient.
+    z = torch.ones(2, 4, 64, device=device, requires_grad=True)
+    zn = torch.nn.functional.normalize(z, dim=-1)
+    embed_sim = torch.bmm(zn, zn.transpose(1, 2))
+    loss = model.cycle_distill_loss(prior, embed_sim)
+    assert loss.item() > 0.01, "cycle loss should penalize collapse"
+    loss.backward()
+    assert torch.isfinite(z.grad).all()
+
+    # perfectly matched similarity -> ~zero loss
+    loss0 = model.cycle_distill_loss(prior, prior.clone())
+    assert loss0.item() < 1e-4, f"matched sim should give ~0 KL, got {loss0.item()}"
+    print(f"[ok] cycle_distill_loss (collapse={loss.item():.4f}, matched={loss0.item():.6f})")
 
 
 def test_forward_backward(device):
@@ -150,6 +173,7 @@ def test_forward_backward(device):
     loss, pred, mask, parts = model(imgs, mask_ratio=0.75)
     assert torch.isfinite(loss), f"loss not finite: {loss}"
     assert torch.isfinite(parts["recon"]) and torch.isfinite(parts["triplet"])
+    assert "cycle" in parts and torch.isfinite(parts["cycle"])
     assert "triplet_active" in parts and torch.isfinite(parts["triplet_active"])
     loss.backward()
     n_grad, n_bad = 0, 0
@@ -199,7 +223,8 @@ if __name__ == "__main__":
     test_masking(device)
     test_triplet_sampling(device)
     test_pixel_similarity_periodicity(device)
-    test_periodic_triplet_loss(device)
+    test_periodic_losses(device)
+    test_cycle_distill_anticollapse(device)
     test_forward_backward(device)
     test_forward_larger_ratio(device)
     print("ALL TESTS PASSED")

@@ -3,7 +3,7 @@
 EP=$1
 module load apptainer/apptainer.module
 WORKSPACE=/home/sk1064/workspace
-OUT=$WORKSPACE/EchoFM_gh/logs/echofm_mae_vitl_f32_v2_0807
+OUT=$WORKSPACE/EchoFM_gh/logs/${ECHOFM_RUN_TAG:-echofm_mae_vitl_f32_v3_0807}
 srun -p defq --gres=gpu:a100-40:1 --cpus-per-task=8 -t 40 -J "mm_fm_training::proj=IRB2025P001686," \
   apptainer exec --nv --writable-tmpfs \
   --bind $WORKSPACE:$WORKSPACE \

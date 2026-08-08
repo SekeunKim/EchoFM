@@ -46,6 +46,8 @@ class MaskedAutoencoderViT(nn.Module):
         triplet_weight=1.0,
         triplet_margin=0.2,
         phase_prior="pixel",
+        cycle_weight=1.0,
+        cycle_tau=0.1,
         **kwargs,
     ):
         super().__init__()
@@ -167,6 +169,12 @@ class MaskedAutoencoderViT(nn.Module):
         self.triplet_weight = triplet_weight
         self.triplet_margin = triplet_margin
         self.phase_prior = phase_prior
+        self.cycle_weight = cycle_weight
+        self.cycle_tau = cycle_tau
+        # projector gets its own norm: sharing the encoder's final norm lets
+        # recon statistics wash out the small frame-to-frame differences the
+        # periodic branch must amplify
+        self.prj_norm = norm_layer(embed_dim)
         self.initialize_weights()
         
         
@@ -252,10 +260,30 @@ class MaskedAutoencoderViT(nn.Module):
         valid = pos_mask.any(dim=-1) & neg_mask.any(dim=-1)
         return pos_idx, neg_idx, valid
 
-    def periodic_triplet_loss(self, imgs, cls_stack):
+    def cycle_distill_loss(self, prior_sim, embed_sim):
         """
-        Cosine-distance triplet on L2-normalized per-frame embeddings.
-        Returns (loss, active_fraction).
+        Dense periodicity supervision: for every anchor row, the softmax
+        distribution of embedding similarities over the other frames must
+        match the pixel-prior distribution (KL). Collapsed embeddings give a
+        uniform row, which has strictly positive KL to the structured prior —
+        so unlike the margin triplet this loss cannot sit at a saddle and
+        directly teaches the cycle structure.
+        """
+        T = prior_sim.shape[-1]
+        eye = torch.eye(T, dtype=torch.bool, device=prior_sim.device).unsqueeze(0)
+        logq = (prior_sim / self.cycle_tau).masked_fill(eye, float("-inf"))
+        logp = (embed_sim / self.cycle_tau).masked_fill(eye, float("-inf"))
+        q = logq.softmax(dim=-1)
+        logp = logp.log_softmax(dim=-1)
+        logq = logq.log_softmax(dim=-1)
+        kl = (q * (logq - logp)).masked_fill(eye, 0.0).sum(dim=-1)  # [N, T]
+        return kl.mean()
+
+    def periodic_losses(self, imgs, cls_stack):
+        """
+        Periodic (cycle-similarity) branch: hard-mined cosine triplet plus
+        dense cycle distillation, both supervised by the pixel-space prior.
+        Returns (triplet_loss, cycle_loss, active_fraction).
         """
         z = F.normalize(cls_stack, p=2, dim=-1)  # [N, T, D]
         embed_sim = torch.bmm(z, z.transpose(1, 2))  # [N, T, T]
@@ -265,13 +293,15 @@ class MaskedAutoencoderViT(nn.Module):
         else:
             prior_sim = embed_sim.detach()
 
+        cycle_loss = self.cycle_distill_loss(prior_sim, embed_sim)
+
         pos_idx, neg_idx, valid = self.triplet_sampling(prior_sim, embed_sim)
 
         if not bool(valid.any()):
             # keep the projector in the autograd graph so DDP gradient
             # reduction stays consistent across ranks
             zero = cls_stack.sum() * 0.0
-            return zero, torch.zeros((), device=cls_stack.device)
+            return zero, cycle_loss, torch.zeros((), device=cls_stack.device)
 
         sim_ap = embed_sim.gather(-1, pos_idx.unsqueeze(-1)).squeeze(-1)  # [N, T]
         sim_an = embed_sim.gather(-1, neg_idx.unsqueeze(-1)).squeeze(-1)
@@ -279,7 +309,7 @@ class MaskedAutoencoderViT(nn.Module):
         per_anchor = F.relu(sim_an - sim_ap + self.triplet_margin)
         loss = per_anchor[valid].mean()
         active = (per_anchor[valid] > 0).float().mean().detach()
-        return loss, active
+        return loss, cycle_loss, active
 
 
     def initialize_weights(self):
@@ -508,7 +538,7 @@ class MaskedAutoencoderViT(nn.Module):
     def decoder_prj(self, x):
         # apply Transformer blocks
         x = self.decoder_block(x)
-        x = self.norm(x)
+        x = self.prj_norm(x)
 
         if self.cls_embed:
             return x[:, 0, :]
@@ -655,15 +685,20 @@ class MaskedAutoencoderViT(nn.Module):
         cls_tokens = self.forward_prj(latent)
         cls_stack = torch.stack(cls_tokens, dim=1)  # [N, T, C]
 
-        triplet_loss, triplet_active = self.periodic_triplet_loss(imgs, cls_stack)
+        triplet_loss, cycle_loss, triplet_active = self.periodic_losses(imgs, cls_stack)
 
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, u*p*p*3]
         recon_loss = self.forward_loss(imgs, pred, mask)
 
-        loss = recon_loss + self.triplet_weight * triplet_loss
+        loss = (
+            recon_loss
+            + self.triplet_weight * triplet_loss
+            + self.cycle_weight * cycle_loss
+        )
         loss_parts = {
             "recon": recon_loss.detach(),
             "triplet": triplet_loss.detach(),
+            "cycle": cycle_loss.detach(),
             "triplet_active": triplet_active,
         }
         return loss, pred, mask, loss_parts

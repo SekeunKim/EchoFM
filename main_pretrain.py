@@ -88,6 +88,18 @@ def get_args_parser():
         help="similarity map used to pick triplet pos/neg sets: pixel-space "
         "cycle similarity (robust) or the model's own embeddings (paper)",
     )
+    parser.add_argument(
+        "--cycle_weight",
+        default=1.0,
+        type=float,
+        help="weight of the dense cycle-similarity distillation (KL) loss",
+    )
+    parser.add_argument(
+        "--cycle_tau",
+        default=0.1,
+        type=float,
+        help="softmax temperature for the cycle distillation loss",
+    )
 
     # Optimizer parameters
     parser.add_argument(

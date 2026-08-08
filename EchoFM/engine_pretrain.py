@@ -76,6 +76,7 @@ def train_one_epoch(
         loss_value = loss.item()
         recon_value = loss_parts["recon"].item()
         triplet_value = loss_parts["triplet"].item()
+        cycle_value = loss_parts["cycle"].item()
         triplet_active_value = loss_parts["triplet_active"].item()
 
         if not math.isfinite(loss_value):
@@ -105,6 +106,7 @@ def train_one_epoch(
         metric_logger.update(loss=loss_value)
         metric_logger.update(recon=recon_value)
         metric_logger.update(triplet=triplet_value)
+        metric_logger.update(cycle=cycle_value)
         metric_logger.update(trip_act=triplet_active_value)
         metric_logger.update(cpu_mem=misc.cpu_mem_usage()[0])
         metric_logger.update(cpu_mem_all=misc.cpu_mem_usage()[1])
@@ -119,6 +121,7 @@ def train_one_epoch(
         triplet_reduce = misc.all_reduce_mean(triplet_value)
         # NB: must run on every rank (collective) — never move inside the
         # rank-0-only log_writer branch or DDP deadlocks
+        cycle_reduce = misc.all_reduce_mean(cycle_value)
         triplet_active_reduce = misc.all_reduce_mean(triplet_active_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """We use epoch_1000x as the x-axis in tensorboard.
@@ -130,6 +133,7 @@ def train_one_epoch(
             log_writer.add_scalar("train_loss", loss_value_reduce, epoch_1000x)
             log_writer.add_scalar("train_loss_recon", recon_reduce, epoch_1000x)
             log_writer.add_scalar("train_loss_triplet", triplet_reduce, epoch_1000x)
+            log_writer.add_scalar("train_loss_cycle", cycle_reduce, epoch_1000x)
             log_writer.add_scalar(
                 "train_triplet_active", triplet_active_reduce, epoch_1000x
             )

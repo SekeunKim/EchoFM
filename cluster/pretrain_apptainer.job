@@ -29,7 +29,9 @@ BLR="${ECHOFM_BLR:-1e-3}"
 TRIPLET_W="${ECHOFM_TRIPLET_W:-1.0}"
 TRIPLET_MARGIN="${ECHOFM_TRIPLET_MARGIN:-0.2}"
 PHASE_PRIOR="${ECHOFM_PHASE_PRIOR:-pixel}"
-RUN_TAG="${ECHOFM_RUN_TAG:-echofm_mae_vitl_f32_v2_$(date +%m%d)}"
+CYCLE_W="${ECHOFM_CYCLE_W:-1.0}"
+CYCLE_TAU="${ECHOFM_CYCLE_TAU:-0.1}"
+RUN_TAG="${ECHOFM_RUN_TAG:-echofm_mae_vitl_f32_v3_$(date +%m%d)}"
 OUT_DIR=$CODE_DIR/logs/$RUN_TAG
 RDZV_PORT=$((10000 + SLURM_JOB_ID % 50000))
 
@@ -64,6 +66,8 @@ srun -N1 -n1 apptainer exec --nv --writable-tmpfs \
         --triplet_weight $TRIPLET_W \
         --triplet_margin $TRIPLET_MARGIN \
         --phase_prior $PHASE_PRIOR \
+        --cycle_weight $CYCLE_W \
+        --cycle_tau $CYCLE_TAU \
         --epochs $EPOCHS \
         --warmup_epochs $WARMUP \
         --blr $BLR \
