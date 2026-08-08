@@ -69,6 +69,26 @@ def get_args_parser():
     )
     parser.set_defaults(norm_pix_loss=False)
 
+    parser.add_argument(
+        "--triplet_weight",
+        default=1.0,
+        type=float,
+        help="weight of the periodic (cycle-similarity) triplet loss",
+    )
+    parser.add_argument(
+        "--triplet_margin",
+        default=0.2,
+        type=float,
+        help="cosine-distance margin of the periodic triplet loss",
+    )
+    parser.add_argument(
+        "--phase_prior",
+        default="pixel",
+        choices=["pixel", "embed"],
+        help="similarity map used to pick triplet pos/neg sets: pixel-space "
+        "cycle similarity (robust) or the model's own embeddings (paper)",
+    )
+
     # Optimizer parameters
     parser.add_argument(
         "--weight_decay", type=float, default=0.05, help="weight decay (default: 0.05)"

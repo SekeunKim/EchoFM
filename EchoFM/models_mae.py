@@ -43,6 +43,9 @@ class MaskedAutoencoderViT(nn.Module):
         trunc_init=False,
         cls_embed=False,
         pred_t_dim=8,
+        triplet_weight=1.0,
+        triplet_margin=0.2,
+        phase_prior="pixel",
         **kwargs,
     ):
         super().__init__()
@@ -161,7 +164,9 @@ class MaskedAutoencoderViT(nn.Module):
 
         self.norm_pix_loss = norm_pix_loss
 
-        self.triplet_loss = nn.TripletMarginLoss(margin=1.0, p=2, eps=1e-7)
+        self.triplet_weight = triplet_weight
+        self.triplet_margin = triplet_margin
+        self.phase_prior = phase_prior
         self.initialize_weights()
         
         
@@ -188,68 +193,95 @@ class MaskedAutoencoderViT(nn.Module):
         
         return similarity_map
 
-    def triplet_sampling(self, similarity_map, cls_tokens):
+    def pixel_similarity(self, imgs):
         """
-        Periodic-driven triplet sampling (EchoFM Sec. 3): every temporal index
-        serves as an anchor; positives are frames whose similarity to the anchor
-        is above the anchor row's mean (same cardiac phase), negatives are
-        below-threshold frames with temporally adjacent frames excluded.
+        Cycle-similarity prior computed in pixel space, pooled to the temporal
+        token grid. Frames at the same cardiac phase (one cycle apart) are
+        similar in pixel space, so this map carries the periodic structure
+        independently of the (still-untrained) embeddings.
 
         Args:
-            similarity_map (tensor): Self-similarity map of shape [N, T, T].
-            cls_tokens (tensor or list): CLS tokens, shape [N, T, D].
-
+            imgs: [N, 3, T_frames, H, W] in [0, 1]
         Returns:
-            (anchor, positive, negative) each of shape [M, D], or None when no
-            valid triplet exists in the batch.
+            sim: [N, T, T] cosine similarity, T = t_grid_size
         """
-        if isinstance(cls_tokens, (list, tuple)):
-            cls_tokens = torch.stack(cls_tokens, dim=1)  # [N, T, D]
+        with torch.no_grad():
+            T = self.patch_embed.t_grid_size
+            N = imgs.shape[0]
+            x = imgs.mean(dim=1)  # grayscale [N, T_frames, H, W]
+            # pool frames belonging to the same temporal token
+            x = x.view(N, T, -1, x.shape[-2], x.shape[-1]).mean(dim=2)
+            x = F.adaptive_avg_pool2d(x, (32, 32)).flatten(2)  # [N, T, 1024]
+            x = x - x.mean(dim=-1, keepdim=True)
+            x = F.normalize(x, p=2, dim=-1)
+            sim = torch.bmm(x, x.transpose(1, 2))
+        return sim
 
-        N, T, D = cls_tokens.shape
-        device = cls_tokens.device
+    def triplet_sampling(self, prior_sim, embed_sim):
+        """
+        Periodic-driven triplet sampling (EchoFM Sec. 3), hardened:
+        pos/neg sets come from `prior_sim` (pixel-space cycle similarity when
+        phase_prior='pixel', so labels are not the model's own guesses), and
+        within those sets the hardest example in *embedding* space is mined —
+        lowest-similarity positive, highest-similarity negative — so the loss
+        keeps a gradient instead of collapsing to zero.
+
+        Args:
+            prior_sim: [N, T, T] similarity defining pos/neg sets.
+            embed_sim: [N, T, T] embedding cosine similarity (for mining).
+        Returns:
+            pos_idx, neg_idx, valid: [N, T] each; valid marks anchors that
+            have at least one positive and one negative.
+        """
+        N, T, _ = prior_sim.shape
+        device = prior_sim.device
         idx = torch.arange(T, device=device)
+        eye = torch.eye(T, dtype=torch.bool, device=device)
+        adjacent = (idx[None, :] - idx[:, None]).abs() <= 1  # includes self
 
-        anchors, positives, negatives = [], [], []
+        row_mean = prior_sim.masked_fill(eye, 0).sum(dim=-1) / (T - 1)  # [N, T]
+        above = prior_sim > row_mean.unsqueeze(-1)
+        pos_mask = above & ~eye
+        neg_mask = ~above & ~adjacent.unsqueeze(0)
 
-        for n in range(N):
-            for t in range(T):
-                row = similarity_map[n, t, :]  # [T]
-                not_self = idx != t
-                # mean similarity excluding the anchor itself
-                mean_similarity = row[not_self].mean()
+        pos_scores = embed_sim.masked_fill(~pos_mask, float("inf"))
+        pos_idx = pos_scores.argmin(dim=-1)  # hardest positive
+        neg_scores = embed_sim.masked_fill(~neg_mask, float("-inf"))
+        neg_idx = neg_scores.argmax(dim=-1)  # hardest negative
 
-                pos_mask = (row > mean_similarity) & not_self
-                # frames right next to the anchor are trivially similar:
-                # keep them out of the negative set
-                non_adjacent = (idx - t).abs() > 1
-                neg_mask = (row <= mean_similarity) & not_self & non_adjacent
+        valid = pos_mask.any(dim=-1) & neg_mask.any(dim=-1)
+        return pos_idx, neg_idx, valid
 
-                positive_indices = pos_mask.nonzero(as_tuple=True)[0]
-                negative_indices = neg_mask.nonzero(as_tuple=True)[0]
-                if len(positive_indices) == 0 or len(negative_indices) == 0:
-                    continue
+    def periodic_triplet_loss(self, imgs, cls_stack):
+        """
+        Cosine-distance triplet on L2-normalized per-frame embeddings.
+        Returns (loss, active_fraction).
+        """
+        z = F.normalize(cls_stack, p=2, dim=-1)  # [N, T, D]
+        embed_sim = torch.bmm(z, z.transpose(1, 2))  # [N, T, T]
 
-                pos_idx = positive_indices[
-                    torch.randint(len(positive_indices), (1,), device=device)
-                ].item()
-                neg_idx = negative_indices[
-                    torch.randint(len(negative_indices), (1,), device=device)
-                ].item()
+        if self.phase_prior == "pixel":
+            prior_sim = self.pixel_similarity(imgs)
+        else:
+            prior_sim = embed_sim.detach()
 
-                anchors.append(cls_tokens[n, t, :])
-                positives.append(cls_tokens[n, pos_idx, :])
-                negatives.append(cls_tokens[n, neg_idx, :])
+        pos_idx, neg_idx, valid = self.triplet_sampling(prior_sim, embed_sim)
 
-        if len(anchors) == 0:
-            return None
+        if not bool(valid.any()):
+            # keep the projector in the autograd graph so DDP gradient
+            # reduction stays consistent across ranks
+            zero = cls_stack.sum() * 0.0
+            return zero, torch.zeros((), device=cls_stack.device)
 
-        anchor = torch.stack(anchors)
-        positive = torch.stack(positives)
-        negative = torch.stack(negatives)
+        sim_ap = embed_sim.gather(-1, pos_idx.unsqueeze(-1)).squeeze(-1)  # [N, T]
+        sim_an = embed_sim.gather(-1, neg_idx.unsqueeze(-1)).squeeze(-1)
+        # cosine distance: d = 1 - sim, so d_ap - d_an = sim_an - sim_ap
+        per_anchor = F.relu(sim_an - sim_ap + self.triplet_margin)
+        loss = per_anchor[valid].mean()
+        active = (per_anchor[valid] > 0).float().mean().detach()
+        return loss, active
 
-        return anchor, positive, negative
-    
+
     def initialize_weights(self):
         if self.cls_embed:
             torch.nn.init.trunc_normal_(self.cls_token, std=0.02)
@@ -623,23 +655,16 @@ class MaskedAutoencoderViT(nn.Module):
         cls_tokens = self.forward_prj(latent)
         cls_stack = torch.stack(cls_tokens, dim=1)  # [N, T, C]
 
-        similarity_map = self.self_similarity(cls_tokens)
-        triplet = self.triplet_sampling(similarity_map, cls_stack)
-        if triplet is not None:
-            anchor, positive, negative = triplet
-            triplet_loss = self.triplet_loss(anchor, positive, negative)
-        else:
-            # keep the projector in the autograd graph so DDP gradient
-            # reduction stays consistent across ranks
-            triplet_loss = cls_stack.sum() * 0.0
+        triplet_loss, triplet_active = self.periodic_triplet_loss(imgs, cls_stack)
 
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, u*p*p*3]
         recon_loss = self.forward_loss(imgs, pred, mask)
 
-        loss = recon_loss + triplet_loss
+        loss = recon_loss + self.triplet_weight * triplet_loss
         loss_parts = {
             "recon": recon_loss.detach(),
             "triplet": triplet_loss.detach(),
+            "triplet_active": triplet_active,
         }
         return loss, pred, mask, loss_parts
 

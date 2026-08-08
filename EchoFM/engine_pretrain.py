@@ -76,6 +76,7 @@ def train_one_epoch(
         loss_value = loss.item()
         recon_value = loss_parts["recon"].item()
         triplet_value = loss_parts["triplet"].item()
+        triplet_active_value = loss_parts["triplet_active"].item()
 
         if not math.isfinite(loss_value):
             for _ in range(args.num_checkpoint_del):
@@ -104,6 +105,7 @@ def train_one_epoch(
         metric_logger.update(loss=loss_value)
         metric_logger.update(recon=recon_value)
         metric_logger.update(triplet=triplet_value)
+        metric_logger.update(trip_act=triplet_active_value)
         metric_logger.update(cpu_mem=misc.cpu_mem_usage()[0])
         metric_logger.update(cpu_mem_all=misc.cpu_mem_usage()[1])
         metric_logger.update(gpu_mem=misc.gpu_mem_usage())
@@ -125,6 +127,11 @@ def train_one_epoch(
             log_writer.add_scalar("train_loss", loss_value_reduce, epoch_1000x)
             log_writer.add_scalar("train_loss_recon", recon_reduce, epoch_1000x)
             log_writer.add_scalar("train_loss_triplet", triplet_reduce, epoch_1000x)
+            log_writer.add_scalar(
+                "train_triplet_active",
+                misc.all_reduce_mean(triplet_active_value),
+                epoch_1000x,
+            )
             log_writer.add_scalar("lr", lr, epoch_1000x)
 
     # gather the stats from all processes

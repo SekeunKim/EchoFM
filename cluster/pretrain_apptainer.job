@@ -18,15 +18,18 @@ WORKSPACE=/home/sk1064/workspace
 SIF=$WORKSPACE/lvfp/sk1064_lvfp.sif
 EXTRA_PKGS=$WORKSPACE/lvfp/extra_pkgs
 CODE_DIR=$WORKSPACE/EchoFM_gh
-# comma-separated list of clip directories (echo_pretrain_apical2 + MIMIC-ECHO cache)
-DATA_DIR="${ECHOFM_DATA_DIR:-/mnt/weka/wekafs/mm_fm_training/echo_pretrain_apical2/clips,/mnt/weka/wekafs/mm_fm_training/MIMIC-ECHO/cache_apical}"
+# comma-separated list of clip directories (MIMIC-ECHO cache_apical is empty as of 8/7)
+DATA_DIR="${ECHOFM_DATA_DIR:-/mnt/weka/wekafs/mm_fm_training/echo_pretrain_apical2/clips}"
 
 NGPU="${ECHOFM_NGPU:-8}"
 BATCH="${ECHOFM_BATCH:-8}"          # per-GPU; ~30 GB on A100-40 (16.9 GB @ batch 4 measured)
 EPOCHS="${ECHOFM_EPOCHS:-100}"
 WARMUP="${ECHOFM_WARMUP:-10}"
 BLR="${ECHOFM_BLR:-1e-3}"
-RUN_TAG="${ECHOFM_RUN_TAG:-echofm_mae_vitl_f32_$(date +%m%d)}"
+TRIPLET_W="${ECHOFM_TRIPLET_W:-1.0}"
+TRIPLET_MARGIN="${ECHOFM_TRIPLET_MARGIN:-0.2}"
+PHASE_PRIOR="${ECHOFM_PHASE_PRIOR:-pixel}"
+RUN_TAG="${ECHOFM_RUN_TAG:-echofm_mae_vitl_f32_v2_$(date +%m%d)}"
 OUT_DIR=$CODE_DIR/logs/$RUN_TAG
 RDZV_PORT=$((10000 + SLURM_JOB_ID % 50000))
 
@@ -57,6 +60,10 @@ srun -N1 -n1 apptainer exec --nv --writable-tmpfs \
         --pred_t_dim 8 \
         --frame_stride 1 \
         --mask_ratio 0.75 \
+        --norm_pix_loss \
+        --triplet_weight $TRIPLET_W \
+        --triplet_margin $TRIPLET_MARGIN \
+        --phase_prior $PHASE_PRIOR \
         --epochs $EPOCHS \
         --warmup_epochs $WARMUP \
         --blr $BLR \

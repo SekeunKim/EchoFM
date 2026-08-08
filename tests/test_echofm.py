@@ -77,33 +77,71 @@ def test_masking(device):
 
 def test_triplet_sampling(device):
     model = make_tiny(device)
-    N, T, D = 2, 8, 16
-    cls_tokens = torch.randn(N, T, D, device=device)
+    N, T = 2, 8
 
-    # crafted similarity: anchor 0 similar to {1,4}, dissimilar to rest
-    sim = torch.zeros(N, T, T, device=device)
+    # crafted prior: anchor 0 similar to {1,4}, dissimilar to rest
+    prior = torch.zeros(N, T, T, device=device)
     for n in range(N):
-        sim[n] = torch.eye(T, device=device)
-        sim[n, 0, 1] = 0.9
-        sim[n, 0, 4] = 0.8
-    out = model.triplet_sampling(sim, cls_tokens)
-    assert out is not None
-    a, p, n_ = out
-    assert a.shape == p.shape == n_.shape and a.shape[1] == D
-
-    # adjacency exclusion: for anchor t, negative index must not be t-1/t/t+1.
-    # verify via exhaustive check on the mask logic for one row
-    row = sim[0, 3, :]
+        prior[n] = torch.eye(T, device=device)
+        prior[n, 0, 1] = 0.9
+        prior[n, 0, 4] = 0.8
+    embed_sim = torch.rand(N, T, T, device=device)
+    pos_idx, neg_idx, valid = model.triplet_sampling(prior, embed_sim)
+    assert pos_idx.shape == neg_idx.shape == valid.shape == (N, T)
+    # anchor 0: positives must come from {1, 4}
+    assert valid[0, 0]
+    assert pos_idx[0, 0].item() in (1, 4)
+    # negatives never self or adjacent
     idx = torch.arange(T, device=device)
-    not_self = idx != 3
-    thresh = row[not_self].mean()
-    neg_ok = ((row <= thresh) & not_self & ((idx - 3).abs() > 1)).nonzero().flatten()
-    assert 2 not in neg_ok and 3 not in neg_ok and 4 not in neg_ok
+    for n in range(N):
+        for t in range(T):
+            if valid[n, t]:
+                assert (neg_idx[n, t] - t).abs() > 1
 
-    # degenerate similarity (all equal) must not crash
+    # hard mining: pos = lowest embed-sim in pos set, neg = highest in neg set
+    row = embed_sim[0, 0]
+    cand = torch.tensor([1, 4], device=device)
+    assert pos_idx[0, 0] == cand[row[cand].argmin()]
+
+    # degenerate prior (all equal): no strictly-above-mean frames -> no valid
     flat = torch.ones(N, T, T, device=device)
-    assert model.triplet_sampling(flat, cls_tokens) is None
-    print("[ok] triplet_sampling (adjacency exclusion, degenerate-safe)")
+    _, _, valid_flat = model.triplet_sampling(flat, embed_sim)
+    assert not valid_flat.any()
+    print("[ok] triplet_sampling (prior-driven sets, hard mining, degenerate-safe)")
+
+
+def _periodic_video(N, T_frames, H, period, device):
+    """Bright square whose x-position oscillates with the given frame period."""
+    imgs = torch.zeros(N, 3, T_frames, H, H, device=device)
+    import math
+
+    for f in range(T_frames):
+        cx = H // 2 + int((H // 4) * math.sin(2 * math.pi * f / period))
+        imgs[:, :, f, H // 2 - 6 : H // 2 + 6, cx - 6 : cx + 6] = 1.0
+    return imgs
+
+
+def test_pixel_similarity_periodicity(device):
+    model = make_tiny(device)  # num_frames=8, t_patch_size=2 -> t_grid=4
+    imgs = _periodic_video(2, 8, 64, period=4, device=device)
+    sim = model.pixel_similarity(imgs)  # [N, 4, 4]
+    assert sim.shape == (2, 4, 4)
+    # frame period 4 = token period 2: lag-2 tokens same phase, lag-1 opposite
+    assert (sim[:, 0, 2] > sim[:, 0, 1] + 0.1).all(), "pixel prior misses periodicity"
+    assert (sim[:, 1, 3] > sim[:, 1, 2] + 0.1).all()
+    print("[ok] pixel_similarity captures cycle periodicity")
+
+
+def test_periodic_triplet_loss(device):
+    model = make_tiny(device)
+    imgs = _periodic_video(2, 8, 64, period=4, device=device)
+    cls_stack = torch.randn(2, 4, 64, device=device, requires_grad=True)
+    loss, active = model.periodic_triplet_loss(imgs, cls_stack)
+    assert torch.isfinite(loss) and loss.item() > 0, "triplet dead at init"
+    assert 0.0 < active.item() <= 1.0
+    loss.backward()
+    assert cls_stack.grad is not None and torch.isfinite(cls_stack.grad).all()
+    print(f"[ok] periodic_triplet_loss (loss={loss.item():.4f}, active={active.item():.2f})")
 
 
 def test_forward_backward(device):
@@ -112,6 +150,7 @@ def test_forward_backward(device):
     loss, pred, mask, parts = model(imgs, mask_ratio=0.75)
     assert torch.isfinite(loss), f"loss not finite: {loss}"
     assert torch.isfinite(parts["recon"]) and torch.isfinite(parts["triplet"])
+    assert "triplet_active" in parts and torch.isfinite(parts["triplet_active"])
     loss.backward()
     n_grad, n_bad = 0, 0
     for name, prm in model.named_parameters():
@@ -159,6 +198,8 @@ if __name__ == "__main__":
     test_clip_indices()
     test_masking(device)
     test_triplet_sampling(device)
+    test_pixel_similarity_periodicity(device)
+    test_periodic_triplet_loss(device)
     test_forward_backward(device)
     test_forward_larger_ratio(device)
     print("ALL TESTS PASSED")
