@@ -57,6 +57,12 @@ are pushed far apart:
 On held-out clips, the embedding phase contrast is positive for 100% of clips, and the
 embedding similarity structure matches the pixel-level cycle structure with r = 0.98.
 
+The phase structure is also visible live: as the clip plays, the model retrieves the
+same-phase frame from another cycle, and the embedding trajectory (PCA) traces the
+cardiac cycle:
+
+<img src="./figure/cycle_phase_pca.gif" width="640px"></img>
+
 ## Installation
 
 ```bash
