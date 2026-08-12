@@ -23,6 +23,7 @@ DATA_DIR="${ECHOFM_DATA_DIR:-/mnt/weka/wekafs/mm_fm_training/echo_pretrain_apica
 
 NGPU="${ECHOFM_NGPU:-8}"
 BATCH="${ECHOFM_BATCH:-8}"          # per-GPU; ~30 GB on A100-40 (16.9 GB @ batch 4 measured)
+ACCUM="${ECHOFM_ACCUM:-1}"         # grad accumulation; set 2 on 4-GPU to keep eff batch 64
 EPOCHS="${ECHOFM_EPOCHS:-100}"
 WARMUP="${ECHOFM_WARMUP:-10}"
 BLR="${ECHOFM_BLR:-1e-3}"
@@ -80,6 +81,7 @@ srun -N1 -n1 apptainer exec --nv --writable-tmpfs \
         --weight_decay 0.05 \
         --clip_grad 0.02 \
         --num_workers 6 \
+        --accum_iter $ACCUM \
         --checkpoint_period 10 \
         --output_dir $OUT_DIR \
         --log_dir $OUT_DIR/tb
