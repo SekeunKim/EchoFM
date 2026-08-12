@@ -144,19 +144,25 @@ class EchoDataset_from_cache_npy(Dataset):
         self.paths = []
         for d in folders:
             files = sorted(
-                os.path.join(d, f) for f in os.listdir(d) if f.endswith(".npy")
+                os.path.join(d, f) for f in os.listdir(d)
+                if f.endswith(".npy") or f.endswith(".npz")
             )
             print(f"{len(files)} cached clips found at {d}")
             self.paths.extend(files)
         if len(self.paths) == 0:
-            raise RuntimeError(f"no .npy clips found in {folders}")
+            raise RuntimeError(f"no .npy/.npz clips found in {folders}")
         print(f"{len(self.paths)} cached clips total")
 
     def __len__(self):
         return len(self.paths)
 
     def _load(self, path):
-        arr = np.load(path, mmap_mode="r")
+        if path.endswith(".npz"):
+            # compressed cache (key "clip"); npz cannot be memory-mapped
+            with np.load(path) as z:
+                arr = z["clip"]
+        else:
+            arr = np.load(path, mmap_mode="r")
         if arr.ndim == 3:  # (T, H, W) grayscale -> replicate channels
             arr = np.repeat(arr[..., None], 3, axis=-1)
         if arr.ndim != 4 or arr.shape[-1] != 3:
