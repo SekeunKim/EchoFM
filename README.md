@@ -26,7 +26,10 @@ that transfer to segmentation, classification, and disease-detection tasks.
 - **Periodicity-aware self-supervision.** Masked reconstruction is combined with a
   periodic contrastive objective, so embeddings encode *where in the cardiac cycle*
   each frame lies — learned without ECG, ED/ES labels, or segmentation.
-- **Pretrained at scale.** Self-supervised pretraining on 290K echocardiography clips.
+- **Multi-view coverage.** Continued-pretrained on apical **and** non-apical views
+  (PLAX/PSAX/subcostal/RV-inflow/suprasternal) — one encoder for the whole study.
+- **Probing shows transferable features.** Frozen embeddings linearly recover view
+  (~77%, 9-way) and clinical measurements (LVEF r≈0.66, LV internal dimension r≈0.6).
 - **Validated downstream.** Segmentation, classification, and disease detection; the
   encoder adapts efficiently to custom tasks with light heads or fine-tuning.
 
@@ -62,6 +65,39 @@ same-phase frame from another cycle, and the embedding trajectory (PCA) traces t
 cardiac cycle:
 
 <img src="./figure/cycle_phase_pca.gif" width="640px"></img>
+
+## Multi-view foundation & downstream probing
+
+The model is continued-pretrained on **apical + non-apical** clips (A2C/A3C/A4C/A5C,
+PLAX, PSAX, subcostal, RV-inflow, suprasternal — 102,595 clips total), so one encoder
+covers the full standard study rather than apical only. Reconstruction stays healthy
+on both apical and non-apical views:
+
+<img src="./figure/multiview/recon_apical_ep100.png" width="800px"></img>
+
+**What the embedding carries (linear/​light probes on frozen features):**
+
+- **View** is linearly recoverable at **~77%** (9-way), and the views separate cleanly
+  under a supervised LDA projection — learned with no view labels.
+
+  <img src="./figure/multiview/view_separability.png" width="800px"></img>
+
+- **Clinical measurements** are carried at moderate strength when probed on the
+  view where each is measured (5-fold ridge/GBM, embedding → value):
+
+  | measurement | best view | Pearson r |
+  |---|---|---|
+  | LVEF | apical | 0.66 |
+  | LVIDs | PLAX | 0.59 |
+  | LVIDd | PLAX | 0.51 |
+  | LA volume / LA A-P | apical / PLAX | 0.44 / 0.43 |
+  | IVSd / PWTd (wall thickness) | PLAX | ~0.25 |
+
+  Chamber size and EF are captured well; fine wall-thickness is the weak spot — a
+  natural target for light task-specific alignment on top of the frozen backbone.
+
+Diagnostics are reproducible with `tools/view_separability.py` and
+`tools/measurement_probe.py`.
 
 ## Installation
 
