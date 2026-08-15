@@ -66,7 +66,7 @@ cardiac cycle:
 Trained across apical and non-apical views, the frozen embeddings also separate the
 nine standard echo views (no view labels used in pretraining; supervised LDA shown):
 
-<img src="./figure/multiview/view_lda.png" width="560px"></img>
+<img src="./figure/multiview/view_lda.png" width="450px"></img>
 
 ## Installation
 
