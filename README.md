@@ -63,6 +63,11 @@ cardiac cycle:
 
 <img src="./figure/cycle_phase_pca.gif" width="640px"></img>
 
+Trained across apical and non-apical views, the frozen embeddings also separate the
+nine standard echo views (no view labels used in pretraining; supervised LDA shown):
+
+<img src="./figure/multiview/view_separability.png" width="800px"></img>
+
 ## Installation
 
 ```bash
